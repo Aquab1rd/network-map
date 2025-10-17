@@ -47,10 +47,10 @@
       <label>Search
         <input id="searchBox" type="text" placeholder="Type a name…"/>
       </label>
-      <label>
+      <label style="align-items:center;flex-direction:row;gap:8px;margin-top:22px">
         <input id="onlyAlongsider" type="checkbox" /> Only connections of selected alongsider
       </label>
-      <button id="clearSel">Clear selection</button>
+      <button id="clearSel" style="align-self:end">Clear selection</button>
     </div>
 
     <div class="legend card" id="legend"></div>
@@ -106,53 +106,60 @@
       return;
     }
 
-    // Normalize nodes
+    // Normalize nodes (tolerant to header variants)
     const nodes = rawNodes
-      .filter(d => d.public == null ? true : String(d.public).toUpperCase() === "TRUE")
-      .map(d => ({
-        id: String((d.id ?? "")).trim(),
-        name: (d.name ?? "").trim(),
-        type: (d.type ?? "").trim(),
-        city: (d.city ?? "").trim(),
-        country: (d.country ?? "").trim(),
-        lat: Number(d.lat),
-        lon: Number(d.lon),
-        tags: String(d.tags ?? "").split(/[;,]/).map(t=>t.trim()).filter(Boolean),
-        alongsider: String(d.alongsider ?? "").split(/[;,]/).map(a=>a.trim()).filter(Boolean),
-        url: d.url ?? ""
-      }))
+      .filter(d => {
+        const p = d.public ?? d.Public ?? d.PUBLIC ?? d.is_public ?? d.IsPublic;
+        if (p == null) return true;
+        const val = String(p).trim().toLowerCase();
+        return val === "true" || val === "1" || val === "yes" || val === "y";
+      })
+      .map(d => {
+        const lat = d.lat ?? d.latitude ?? d.Latitude ?? d.LAT;
+        const lon = d.lon ?? d.long ?? d.longitude ?? d.Longitude ?? d.LON ?? d.Lng;
+        return {
+          id: String((d.id ?? d.ID ?? d.Id ?? "")).trim(),
+          name: (d.name ?? d.Name ?? "").trim(),
+          type: (d.type ?? d.Type ?? "").trim(),
+          city: (d.city ?? d.City ?? "").trim(),
+          country: (d.country ?? d.Country ?? "").trim(),
+          lat: Number(lat),
+          lon: Number(lon),
+          tags: String(d.tags ?? d.Tags ?? "").split(/[;,]/).map(t=>t.trim()).filter(Boolean),
+          alongsider: String(d.alongsider ?? d.Alongsider ?? "").split(/[;,]/).map(a=>a.trim()).filter(Boolean),
+          url: d.url ?? d.URL ?? ""
+        };
+      })
       .filter(n => n.id && Number.isFinite(n.lat) && Number.isFinite(n.lon));
 
     const nodeById = new Map(nodes.map(n => [n.id, n]));
 
     // Normalize & de-duplicate edges (undirected)
     let edges = rawEdges
-      .filter(d => d.public == null ? true : String(d.public).toUpperCase() === "TRUE")
+      .filter(d => {
+        const p = d.public ?? d.Public ?? d.PUBLIC ?? d.is_public ?? d.IsPublic;
+        if (p == null) return true;
+        const val = String(p).trim().toLowerCase();
+        return val === "true" || val === "1" || val === "yes" || val === "y";
+      })
       .map(e => ({
-        source: String(e.source_id ?? "").trim(),
-        target: String(e.target_id ?? "").trim(),
-        relationship: (e.relationship ?? "").trim(),
-        since: e.since ?? ""
+        source: String((e.source_id ?? e.Source ?? e.source ?? "")).trim(),
+        target: String((e.target_id ?? e.Target ?? e.target ?? "")).trim(),
+        relationship: (e.relationship ?? e.Relationship ?? "").trim(),
+        since: e.since ?? e.Since ?? ""
       }))
       .filter(e => nodeById.has(e.source) && nodeById.has(e.target) && e.source !== e.target);
 
     const seen = new Set(), uniq = [];
     for (const e of edges){
-      const [a,b] = e.source < e.target ? [e.source, e.target] : [e.target, e.source];
+      const a = e.source < e.target ? e.source : e.target;
+      const b = e.source < e.target ? e.target : e.source;
       const key = a + "|" + b;
       if (!seen.has(key)){ seen.add(key); uniq.push(e); }
     }
     edges = uniq;
 
     setStatus(`Loaded <b>${nodes.length}</b> nodes and <b>${edges.length}</b> edges.`);
-
-    if (!nodes.length){
-      setStatus(`No nodes after filtering. Check:<br>
-      • Columns exist: <code>id,name,type,city,country,lat,lon,tags,alongsider,url,public</code><br>
-      • <code>lat</code>/<code>lon</code> are numbers (not blank)<br>
-      • <code>public</code> is TRUE for rows you want to show`, true);
-      return;
-    }
 
     // Build filter options
     const typeSel = document.getElementById('typeFilter');
@@ -194,15 +201,55 @@
     });
     map.addControl(new mapboxgl.NavigationControl());
 
-    function buildGeo(ids){
-      return {
+    function refreshMap(ids){
+      // If style isn't ready yet, wait once and then try again.
+      if (!map.isStyleLoaded()) {
+        map.once("load", () => refreshMap(ids));
+        return;
+      }
+
+      const data = {
         type:"FeatureCollection",
         features: Array.from(ids).map(id => {
           const n = nodeById.get(id);
-          return { type:"Feature", geometry:{ type:"Point", coordinates:[n.lon, n.lat] },
-            properties:{ id:n.id, name:n.name, type:n.type, color:colorFor(n) } };
+          return {
+            type:"Feature",
+            geometry:{ type:"Point", coordinates:[n.lon, n.lat] },
+            properties:{ id:n.id, name:n.name, type:n.type, color:colorFor(n) }
+          };
         })
       };
+
+      if (map.getSource("nodes")) {
+        map.getSource("nodes").setData(data);
+      } else {
+        map.addSource("nodes", {type:"geojson", data});
+        map.addLayer({
+          id:"nodes",
+          type:"circle",
+          source:"nodes",
+          paint:{
+            "circle-radius": 6,
+            "circle-stroke-width": 1,
+            "circle-color": ["get","color"],
+            "circle-stroke-color": "#222"
+          }
+        });
+        map.on("click","nodes",(e)=>{
+          const f = e.features?.[0];
+          if (!f) return;
+          selectNode(f.properties.id, true);
+        });
+      }
+
+      // Fit bounds if we have points
+      if (data.features.length){
+        const b = new mapboxgl.LngLatBounds();
+        data.features.forEach(f => b.extend(f.geometry.coordinates));
+        map.fitBounds(b, {padding:40, maxZoom:6});
+      }
+
+      setStatus(`Loaded <b>${nodes.length}</b> nodes and <b>${edges.length}</b> edges. Showing <b>${data.features.length}</b> pins.`);
     }
 
     // Sigma graph
@@ -213,6 +260,15 @@
 
     // Filters & selection
     let selectedId = null;
+
+    // Disable the alongsider toggle if nothing is selected
+    function syncAlongsiderToggle(){
+      onlyAlongsider.disabled = !selectedId;
+      onlyAlongsider.title = selectedId ? "" : "Select an Alongsider first";
+      if (!selectedId) onlyAlongsider.checked = false;
+    }
+    syncAlongsiderToggle();
+
     function currentFilteredIds(){
       const typeF = typeSel.value, tagF = tagSel.value;
       const base = nodes.filter(n => (typeF === "All" || n.type === typeF) && (tagF === "Any" || n.tags.includes(tagF)));
@@ -226,21 +282,6 @@
         }
       }
       return new Set(base.map(n=>n.id));
-    }
-
-    function refreshMap(ids){
-      const data = buildGeo(ids);
-      if (map.getSource("nodes")) map.getSource("nodes").setData(data);
-      else {
-        map.addSource("nodes", {type:"geojson", data});
-        map.addLayer({ id:"nodes", type:"circle", source:"nodes",
-          paint:{ "circle-radius":6, "circle-stroke-width":1, "circle-color":["get","color"], "circle-stroke-color":"#222" }});
-        map.on("click","nodes",(e)=>{ const f=e.features?.[0]; if (!f) return; selectNode(f.properties.id, true); });
-      }
-      if (data.features.length){
-        const b = new mapboxgl.LngLatBounds(); data.features.forEach(f => b.extend(f.geometry.coordinates));
-        map.fitBounds(b, {padding:40, maxZoom:6});
-      }
     }
 
     function refreshSigma(ids){
@@ -266,16 +307,15 @@
     }
 
     function selectNode(id, fly){
-      selectedId = id;
+      selectedId = id; syncAlongsiderToggle();
       const n = nodeById.get(id);
-      const details = document.getElementById('details');
-      if (!n){ details.textContent="(Click a pin or node to see details)"; return; }
+      if (!n){ document.getElementById('details').textContent="(Click a pin or node to see details)"; return; }
       const linked = edges
         .filter(e => e.source === id || e.target === id)
         .map(e => e.source === id ? e.target : e.source)
         .filter(x => nodeById.has(x))
         .map(x => nodeById.get(x));
-      details.innerHTML = `<b>${n.name}</b> — <i>${n.type}</i>
+      document.getElementById('details').innerHTML = `<b>${n.name}</b> — <i>${n.type}</i>
 ${n.city ? n.city + ", " : ""}${n.country || ""}
 
 Tags: ${n.tags.join(", ") || "—"}
@@ -293,11 +333,30 @@ ${linked.map(x => `• ${x.name} (${x.type})`).join("<br/>")}
       const q = search.value.toLowerCase().trim(); if (!q) return;
       const hit = nodes.find(n => n.name.toLowerCase().includes(q)); if (hit) selectNode(hit.id, true);
     });
-    document.getElementById('clearSel').addEventListener("click", ()=>{ selectedId=null; document.getElementById('details').textContent="(Click a pin or node to see details)"; highlightSelection(); });
+    document.getElementById('clearSel').addEventListener("click", ()=>{
+      selectedId=null; syncAlongsiderToggle();
+      document.getElementById('details').textContent="(Click a pin or node to see details)";
+      highlightSelection();
+      const ids = currentFilteredIds(); refreshMap(ids); refreshSigma(ids);
+    });
 
-    // initial render + filter wiring
-    const ids = currentFilteredIds(); refreshMap(ids); refreshSigma(ids);
-    for (const el of [typeSel, tagSel, onlyAlongsider]) el.addEventListener("change", ()=>{ const ids=currentFilteredIds(); refreshMap(ids); refreshSigma(ids); });
+    // initial render + filter wiring (wait for map load)
+    map.once("load", () => {
+      const ids = currentFilteredIds();
+      refreshMap(ids);
+      refreshSigma(ids);
+    });
+
+    for (const el of [typeSel, tagSel, onlyAlongsider]){
+      el.addEventListener("change", ()=>{
+        const ids = currentFilteredIds();
+        refreshMap(ids);
+        refreshSigma(ids);
+      });
+    }
+
+    // click in sigma
+    renderer.on("clickNode", ({node}) => selectNode(node, true));
 
   })();
   </script>
