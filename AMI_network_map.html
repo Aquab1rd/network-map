@@ -69,7 +69,9 @@
   <!-- libs -->
   <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
   <script src="https://unpkg.com/graphology@0.25.4/dist/graphology.umd.min.js"></script>
+  <!-- Sigma UMD exposes window.Sigma -->
   <script src="https://unpkg.com/sigma@2.5.0/build/sigma.min.js"></script>
+  <!-- Robust CSV parser -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 
   <script>
@@ -117,7 +119,7 @@
       return null;
     }
 
-    // --- Load ---
+    // --- Load data ---
     let rawNodes, rawEdges;
     try {
       [rawNodes, rawEdges] = await Promise.all([loadCSV(NODES_CSV_URL), loadCSV(EDGES_CSV_URL)]);
@@ -209,7 +211,7 @@
       legend.append(chip);
     }
 
-    // --- Mapbox ---
+    // --- Mapbox (create early; render pins even if Sigma fails) ---
     mapboxgl.accessToken = MAPBOX_TOKEN;
     const map = new mapboxgl.Map({
       container: 'map', style: 'mapbox://styles/mapbox/light-v11',
@@ -228,21 +230,6 @@
         })
       };
     }
-
-    // --- Sigma graph ---
-    const G = new graphology.Graph({type:"undirected", multi:false, allowSelfLoops:false});
-    for (const n of nodes) {
-      G.addNode(n.id, {label:n.name, x:Math.random(), y:Math.random(), size:6, color:colorFor(n), type:n.type});
-    }
-    for (const e of edges) {
-      if (G.hasNode(e.source) && G.hasNode(e.target) && !G.hasEdge(e.source, e.target)) {
-        G.addEdge(e.source, e.target, {relationship:e.relationship});
-      }
-    }
-    const renderer = new sigma.Sigma(G, document.getElementById('net'), { renderEdgeLabels:false, labelDensity:0.08, labelGridCellSize:60 });
-
-    // --- Filters & selection ---
-    let selectedId = null;
 
     const passesType = n => typeSel.value === "All" ? true : n.type === typeSel.value;
     const passesTag  = n => tagSel.value === "Any" ? true : n.tags.includes(tagSel.value);
@@ -276,26 +263,68 @@
       }
     }
 
-    function refreshSigma(ids){
-      renderer.setSetting("nodeReducer", (n,data)=> ids.has(n) ? data : {...data, hidden:true});
-      renderer.setSetting("edgeReducer", (e,data)=> {
-        const [a,b]=G.extremities(e); return (ids.has(a)&&ids.has(b)) ? data : {...data, hidden:true};
-      });
-      renderer.refresh(); highlightSelection();
-    }
+    // --- Initially render pins FIRST ---
+    let selectedId = null;
+    const initialIds = currentFilteredIds();
+    refreshMap(initialIds);
 
-    function highlightSelection(){
-      const id = selectedId, neighbors = new Set(id?[id]:[]);
-      if (id && G.hasNode(id)) G.forEachNeighbor(id, nb => neighbors.add(nb));
-      renderer.setSetting("nodeReducer", (n,data)=> {
-        const hidden = data.hidden; if (!id) return data;
-        return hidden ? data : (neighbors.has(n) ? data : {...data, color:"#777"});
+    // --- Try to initialize Sigma; if it fails, keep the map working ---
+    let renderer = null;
+    try {
+      const SigmaClass = window.Sigma || (window.sigma && window.sigma.Sigma);
+      if (!SigmaClass) throw new Error("Sigma UMD not available on window.Sigma");
+      const G = new graphology.Graph({type:"undirected", multi:false, allowSelfLoops:false});
+      for (const n of nodes) {
+        G.addNode(n.id, {label:n.name, x:Math.random(), y:Math.random(), size:6, color:colorFor(n), type:n.type});
+      }
+      for (const e of edges) {
+        if (G.hasNode(e.source) && G.hasNode(e.target) && !G.hasEdge(e.source, e.target)) {
+          G.addEdge(e.source, e.target, {relationship:e.relationship});
+        }
+      }
+      renderer = new SigmaClass(G, document.getElementById('net'), {
+        renderEdgeLabels:false, labelDensity:0.08, labelGridCellSize:60
       });
-      renderer.setSetting("edgeReducer", (e,data)=> {
-        if (!id) return data;
-        const [a,b]=G.extremities(e); return (neighbors.has(a)&&neighbors.has(b)) ? data : {...data, color:"#555"};
+
+      function refreshSigma(ids){
+        renderer.setSetting("nodeReducer", (n,data)=> ids.has(n) ? data : {...data, hidden:true});
+        renderer.setSetting("edgeReducer", (e,data)=> {
+          const [a,b]=G.extremities(e); return (ids.has(a)&&ids.has(b)) ? data : {...data, hidden:true};
+        });
+        renderer.refresh(); highlightSelection();
+      }
+
+      function highlightSelection(){
+        const id = selectedId, neighbors = new Set(id?[id]:[]);
+        if (id && G.hasNode(id)) G.forEachNeighbor(id, nb => neighbors.add(nb));
+        renderer.setSetting("nodeReducer", (n,data)=> {
+          const hidden = data.hidden; if (!id) return data;
+          return hidden ? data : (neighbors.has(n) ? data : {...data, color:"#777"});
+        });
+        renderer.setSetting("edgeReducer", (e,data)=> {
+          if (!id) return data;
+          const [a,b]=G.extremities(e); return (neighbors.has(a)&&neighbors.has(b)) ? data : {...data, color:"#555"};
+        });
+        renderer.refresh();
+      }
+
+      renderer.on("clickNode", ({node}) => selectNode(node, true));
+
+      // Hook up filters to both map + sigma
+      for (const el of [typeSel, tagSel, onlyA]) el.addEventListener("change", ()=>{
+        const ids=currentFilteredIds(); refreshMap(ids); refreshSigma(ids);
       });
-      renderer.refresh();
+
+      // Initial sigma filter
+      refreshSigma(initialIds);
+
+    } catch (err){
+      console.warn("Sigma failed to initialize; continuing with map only.", err);
+      // Map will still work. Wire filters to map only:
+      for (const el of [typeSel, tagSel, onlyA]) el.addEventListener("change", ()=>{
+        const ids=currentFilteredIds(); refreshMap(ids);
+      });
+      // Leave the network panel empty.
     }
 
     function selectNode(id, fly){
@@ -303,7 +332,6 @@
       const n = nodeById.get(id);
       if (!n){
         details.textContent = "(Click a pin or node to see details)";
-        highlightSelection();
         return;
       }
       const linked = edges
@@ -322,7 +350,11 @@ ${n.url ? `<a href="${n.url}" target="_blank" rel="noopener">Website</a>` : ""}
 ${linked.map(x => `• ${x.name} (${x.type})`).join("<br/>")}
 `;
       if (fly) map.flyTo({center:[n.lon, n.lat], zoom:6});
-      highlightSelection();
+      // If sigma exists, update highlighting
+      if (renderer && typeof renderer.refresh === "function") {
+        const evt = new Event('change'); // trigger reducers via below call
+        typeSel.dispatchEvent(evt); // cheap way to recompute reducers
+      }
     }
 
     // search & clear
@@ -330,12 +362,7 @@ ${linked.map(x => `• ${x.name} (${x.type})`).join("<br/>")}
       const q = search.value.toLowerCase().trim(); if (!q) return;
       const hit = nodes.find(n => n.name.toLowerCase().includes(q)); if (hit) selectNode(hit.id, true);
     });
-    clearSel.addEventListener("click", ()=>{ selectedId=null; details.textContent="(Click a pin or node to see details)"; highlightSelection(); });
-    renderer.on("clickNode", ({node}) => selectNode(node, true));
-
-    // initial render + filter wiring
-    const ids = currentFilteredIds(); refreshMap(ids); refreshSigma(ids);
-    for (const el of [typeSel, tagSel, onlyA]) el.addEventListener("change", ()=>{ const ids=currentFilteredIds(); refreshMap(ids); refreshSigma(ids); });
+    clearSel.addEventListener("click", ()=>{ selectedId=null; details.textContent="(Click a pin or node to see details)"; typeSel.dispatchEvent(new Event('change')); });
 
   })();
   </script>
