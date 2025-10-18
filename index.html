@@ -1,87 +1,26 @@
-
 <!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AMI Map — Robust Pins</title>
-  <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet" />
-  <style>
-    html,body{height:100%;margin:0;background:#0f1115;color:#e8ebf2;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
-    #top{padding:10px 14px;font-size:14px}
-    #map{position:absolute;inset:60px 0 0 0}
-    .ok{color:#75ff9f} .bad{color:#ff7b7b}
-    code{background:#151922;border:1px solid #273043;border-radius:6px;padding:2px 6px}
-  </style>
-</head>
-<body>
-<div id="top">Loading…</div>
-<div id="map"></div>
-
-<script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
-<script>
-(async function(){
-  const NODES_CSV_URL = "https://docs.google.com/spreadsheets/d/1MSwF46BkDjRhOdHd4Pw0ArCVgvdcgDACWvyswFq8XI4/gviz/tq?tqx=out:csv&sheet=Nodes";
-  const MAPBOX_TOKEN  = "pk.eyJ1IjoiYXF1YWIxcmQiLCJhIjoiY21ndjl5Y2RzMGN2azJsc2J4d3d2N2tyeSJ9.JApvZZEs_kiwNl4Y9-aRaQ";
-  const top = document.getElementById('top');
-  function set(msg, ok=true){ top.innerHTML = (ok?'<span class="ok">✓</span> ':'<span class="bad">✗</span> ')+msg; }
-
-  mapboxgl.accessToken = MAPBOX_TOKEN;
-  const map = new mapboxgl.Map({container:'map', style:'mapbox://styles/mapbox/light-v11', center:[10,20], zoom:1.2});
-  map.addControl(new mapboxgl.NavigationControl());
-
-  // load + normalize headers & values
-  const resp = await fetch(NODES_CSV_URL, {cache:"no-store"});
-  if (!resp.ok){ set("Google Sheet not reachable: HTTP "+resp.status, false); return; }
-  const csv = await resp.text();
-  const parsed = Papa.parse(csv, {header:true, skipEmptyLines:true});
-  const rows0 = parsed.data;
-
-  // normalize keys (trim, lowercase, remove BOM) and coerce numbers
-  const rows = rows0.map(r => {
-    const o = {};
-    for (const k in r){
-      const nk = k.replace(/^\ufeff/, '').trim().toLowerCase();
-      o[nk] = r[k];
-    }
-    // treat comma decimals, trim spaces
-    const num = v => Number(String(v ?? '').replace(',', '.').trim());
-    o.lat = num(o.lat);
-    o.lon = num(o.lon);
-    // normalize public to boolean
-    const pub = String(o.public ?? '').trim().toUpperCase();
-    o.public = (pub === '' || pub === 'TRUE' || pub === 'YES' || pub === '1');
-    // id fallback
-    o.id = (o.id ?? '').toString().trim() || (o.name ?? '').toString().trim();
-    o.name = (o.name ?? '').toString().trim() || o.id;
-    o.type = (o.type ?? '').toString().trim();
-    return o;
-  });
-
-  const valid = rows.filter(r => Number.isFinite(r.lat) && Number.isFinite(r.lon) && r.public);
-  if (!valid.length){
-    set("Loaded "+rows.length+" rows but 0 valid pins. Check column headers (exactly lat/lon), numeric values, and public=TRUE/Yes/1.", false);
-  } else {
-    set("Loaded "+rows.length+" rows, plotting "+valid.length+" pins.");
-  }
-
-  const fc = {type:'FeatureCollection', features: valid.map(r => ({
-    type:'Feature', geometry:{type:'Point', coordinates:[r.lon, r.lat]},
-    properties:{name:r.name, type:r.type}
-  }))};
-
-  map.on('load', ()=>{
-    map.addSource('nodes',{type:'geojson',data:fc});
-    map.addLayer({id:'nodes',type:'circle',source:'nodes',
-      paint:{'circle-radius':6,'circle-color':'#3aa0ff','circle-stroke-width':1,'circle-stroke-color':'#1a1f2c'}});
-    if (fc.features.length){
-      const b = new mapboxgl.LngLatBounds();
-      fc.features.forEach(f=>b.extend(f.geometry.coordinates));
-      map.fitBounds(b,{padding:40,maxZoom:6});
-    }
-  });
-})();
-</script>
-</body>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Network Map</title>
+    <style>
+      html, body, iframe {
+        height: 100%;
+        width: 100%;
+        margin: 0;
+        border: 0;
+      }
+      iframe {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <iframe 
+      src="./AMI_network_map.html?v=2" 
+      loading="lazy" 
+      title="Network Map">
+    </iframe>
+  </body>
 </html>
