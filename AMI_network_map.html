@@ -252,8 +252,23 @@
       const data = buildGeo(ids);
       if (map.getSource("nodes")) map.getSource("nodes").setData(data);
       else {
-        map.addSource("nodes", {type:"geojson", data});
-        map.addLayer({ id:"nodes", type:"circle", source:"nodes",
+        map.on('load', () => {
+  map.addSource("nodes", { type: "geojson", data });
+  map.addLayer({
+    id: "nodes",
+    type: "circle",
+    source: "nodes",
+    paint: {
+      "circle-radius": 6,
+      "circle-stroke-width": 1,
+      "circle-color": ["get", "color"],
+      "circle-stroke-color": "#222"
+    }
+  });
+
+  // you can also fitBounds, set markers, etc. here safely
+});
+
           paint:{ "circle-radius":6, "circle-stroke-width":1, "circle-color":["get","color"], "circle-stroke-color":"#222" }});
         map.on("click","nodes",(e)=>{ const f=e.features?.[0]; if (!f) return; selectNode(f.properties.id, true); });
       }
