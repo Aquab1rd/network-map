@@ -3,21 +3,20 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Alongside Ministries — Network Map</title>
+  <title>Alongside Ministries — Map (Stable)</title>
 
   <!-- Mapbox CSS -->
   <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet" />
 
   <style>
     :root { --bg:#0f1115; --panel:#151922; --ink:#e8ebf2; --muted:#9aa3b2; --accent:#3aa0ff; }
-    html, body { height:100%; margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;}
+    html, body { height:100%; margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
     .wrap { max-width:1200px; margin:0 auto; padding:20px; }
     h1 { font-size:20px; margin:4px 0 8px; font-weight:700; }
     .hint { color:var(--muted); font-size:12px; margin:0 0 12px; }
     .grid { display:grid; grid-template-columns: 1fr 380px; gap:16px; }
     .card { background:var(--panel); border:1px solid #202634; border-radius:12px; padding:12px; }
     #map { height:520px; border-radius:10px; overflow:hidden; }
-    #net { height:560px; border-radius:10px; overflow:hidden; }
     .controls { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px;}
     .controls label { display:flex; flex-direction:column; gap:6px; font-size:12px; color:var(--muted); }
     select, input[type="text"], button { background:#0c0f16; color:var(--ink); border:1px solid #273043; border-radius:8px; padding:8px 10px; min-width:160px;}
@@ -34,7 +33,7 @@
 </head>
 <body>
   <div class="wrap">
-    <h1>Alongside Ministries — Interactive Network Map</h1>
+    <h1>Alongside Ministries — Interactive Map</h1>
     <div id="status" class="hint">Loading data…</div>
 
     <div class="controls card">
@@ -47,36 +46,26 @@
       <label>Search
         <input id="searchBox" type="text" placeholder="Type a name…"/>
       </label>
-      <label style="display:flex;align-items:center;gap:8px;margin-top:auto;">
-        <input id="onlyAlongsider" type="checkbox" /> Only connections of selected alongsider
-      </label>
       <button id="clearSel" style="margin-top:auto;">Clear selection</button>
     </div>
 
     <div class="legend card" id="legend"></div>
 
     <div class="grid">
-      <div class="card">
+      <div class="card" style="grid-column: 1 / -1;">
         <div id="map"></div>
       </div>
-      <div class="card details" id="details">(Click a pin or node to see details)</div>
-      <div class="card" style="grid-column: 1 / -1;">
-        <div id="net"></div>
-      </div>
+      <div class="card details" id="details">(Click a pin to see details)</div>
     </div>
   </div>
 
   <!-- libs -->
   <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
-  <script src="https://unpkg.com/graphology@0.25.4/dist/graphology.umd.min.js"></script>
-  <!-- Sigma UMD exposes window.Sigma -->
-  <script src="https://unpkg.com/sigma@2.5.0/build/sigma.min.js"></script>
-  <!-- Robust CSV parser -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 
   <script>
   (async function(){
-    // === YOUR LIVE SHEETS + TOKEN ===
+    // LIVE SHEETS + TOKEN (yours)
     const NODES_CSV_URL = "https://docs.google.com/spreadsheets/d/1MSwF46BkDjRhOdHd4Pw0ArCVgvdcgDACWvyswFq8XI4/gviz/tq?tqx=out:csv&sheet=Nodes";
     const EDGES_CSV_URL = "https://docs.google.com/spreadsheets/d/1eQrmiVA4wxf6J79SZkyhZb-vEAyX3yxfapen113MSrA/gviz/tq?tqx=out:csv&sheet=Edges";
     const MAPBOX_TOKEN  = "pk.eyJ1IjoiYXF1YWIxcmQiLCJhIjoiY21ndjl5Y2RzMGN2azJsc2J4d3d2N2tyeSJ9.JApvZZEs_kiwNl4Y9-aRaQ";
@@ -85,63 +74,61 @@
     const typeSel  = document.getElementById('typeFilter');
     const tagSel   = document.getElementById('tagFilter');
     const search   = document.getElementById('searchBox');
-    const onlyA    = document.getElementById('onlyAlongsider');
     const clearSel = document.getElementById('clearSel');
     const legend   = document.getElementById('legend');
     const details  = document.getElementById('details');
 
-    function setStatus(msg, isError=false){
+    const setStatus = (msg, isError=false) => {
       statusEl.innerHTML = isError ? `<span class="error">${msg}</span>` : msg;
       console.log(msg);
-    }
+    };
 
-    // --- Robust CSV loader ---
+    // Robust CSV helpers
     async function loadCSV(url){
       const r = await fetch(url, {cache:"no-store"});
       if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
       const text = await r.text();
-      const p = Papa.parse(text, {header:true, skipEmptyLines:true});
-      return p.data || [];
+      return Papa.parse(text, {header:true, skipEmptyLines:true}).data || [];
     }
     const normKey = k => String(k||'').replace(/^\ufeff/,'').trim().toLowerCase();
     const toNum = v => {
       if (v == null) return NaN;
-      const s = String(v).trim().replace(',', '.'); // allow comma decimals
+      const s = String(v).trim().replace(',', '.'); // comma decimals ok
       const n = Number(s);
       return Number.isFinite(n) ? n : NaN;
     };
-    function findKey(headers, aliases){
+    const findKey = (headers, aliases) => {
       const H = headers.map(normKey);
       for (const a of aliases){
         const i = H.indexOf(a);
-        if (i !== -1) return headers[i]; // original header
+        if (i !== -1) return headers[i];
       }
       return null;
-    }
+    };
 
-    // --- Load data ---
+    // Load data
     let rawNodes, rawEdges;
     try {
       [rawNodes, rawEdges] = await Promise.all([loadCSV(NODES_CSV_URL), loadCSV(EDGES_CSV_URL)]);
     } catch (e){
-      setStatus(`Couldn’t load Google Sheets CSV. Check sharing (“Anyone with the link → Viewer”) and tab names (Nodes / Edges).<br>${e.message}`, true);
+      setStatus(`Couldn’t load Google Sheets. Check sharing and tab names.<br>${e.message}`, true);
       return;
     }
 
-    // --- Detect headers (accept many variants) ---
+    // Detect headers
     const nodeHeaders = Object.keys(rawNodes[0] || {});
     const latKey = findKey(nodeHeaders, ["lat","latitude","y","coord_lat","latitud"]);
     const lonKey = findKey(nodeHeaders, ["lon","lng","long","longitude","x","coord_lon","longitud"]);
     const pubKey = findKey(nodeHeaders, ["public","visible","publish","is_public"]);
 
-    // --- Normalize nodes ---
+    // Normalize nodes
     const nodes = rawNodes.map(row => {
       const lat = latKey ? toNum(row[latKey]) : NaN;
       const lon = lonKey ? toNum(row[lonKey]) : NaN;
-      let vis = true; // default visible
+      let vis = true;
       if (pubKey){
-        const raw = String(row[pubKey] ?? "").trim().toUpperCase();
-        vis = (raw === "" || raw === "TRUE" || raw === "YES" || raw === "1");
+        const v = String(row[pubKey] ?? "").trim().toUpperCase();
+        vis = (v === "" || v === "TRUE" || v === "YES" || v === "1");
       }
       return {
         id: String(row.id ?? row.ID ?? row.Id ?? "").trim() || String(row.name ?? "").trim(),
@@ -151,234 +138,126 @@
         country: String(row.country ?? "").trim(),
         lat, lon,
         tags: String(row.tags ?? "").split(/[;,]/).map(t=>t.trim()).filter(Boolean),
-        alongsider: String(row.alongsider ?? "").split(/[;,]/).map(a=>a.trim()).filter(Boolean),
         url: row.url ?? "",
         public: vis
       };
-    })
-    .filter(n => n.id && Number.isFinite(n.lat) && Number.isFinite(n.lon) && n.public);
+    }).filter(n => n.id && Number.isFinite(n.lat) && Number.isFinite(n.lon) && n.public);
 
     const nodeById = new Map(nodes.map(n => [n.id, n]));
 
-    // --- Normalize edges (de-duplicate undirected; respect public if present) ---
-    let edges = rawEdges.map(e => ({
-      source: String(e.source_id ?? e.source ?? "").trim(),
-      target: String(e.target_id ?? e.target ?? "").trim(),
-      relationship: String(e.relationship ?? "").trim(),
-      since: e.since ?? "",
-      public: (String(e.public ?? "").trim().toUpperCase() !== "FALSE")
-    }))
-    .filter(e => e.public && nodeById.has(e.source) && nodeById.has(e.target) && e.source !== e.target);
-
-    const seen = new Set(), uniq = [];
-    for (const e of edges){
-      const [a,b] = e.source < e.target ? [e.source, e.target] : [e.target, e.source];
-      const key = a + "|" + b;
-      if (!seen.has(key)) { seen.add(key); uniq.push(e); }
-    }
-    edges = uniq;
-
-    setStatus(`Loaded <b>${nodes.length}</b> nodes and <b>${edges.length}</b> edges.`);
-
-    if (!nodes.length){
-      setStatus(`No nodes after filtering. Check:<br>
-      • Columns exist (any case/alias ok): <code>id,name,type,city,country,lat/latitude/lng/longitude,tags,alongsider,url,public</code><br>
-      • <code>lat</code>/<code>lon</code> are numbers (commas ok)<br>
-      • <code>public</code> is TRUE / Yes / 1 for visible rows`, true);
-      return;
-    }
-
-    // --- Filter options ---
+    // UI: filters + legend
     const types = Array.from(new Set(nodes.map(n => n.type))).sort();
     const allTags = Array.from(new Set(nodes.flatMap(n => n.tags))).sort();
     for (const t of types) typeSel.append(new Option(t, t));
     for (const t of allTags) tagSel.append(new Option(t, t));
-
-    // --- Colors ---
-    const palettes = [
-      "#4e79a7","#f28e2b","#e15759","#76b7b2","#59a14f","#edc948","#b07aa1","#ff9da7","#9c755f","#bab0ab",
-      "#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf"
-    ];
-    const typeColors = new Map(types.map((t,i)=>[t, palettes[i % palettes.length]]));
+    const palette = ["#4e79a7","#f28e2b","#e15759","#76b7b2","#59a14f","#edc948","#b07aa1","#ff9da7","#9c755f","#bab0ab","#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf"];
+    const typeColors = new Map(types.map((t,i)=>[t, palette[i % palette.length]]));
     const colorFor = n => typeColors.get(n.type) || "#999";
-
-    // --- Legend ---
-    for (const t of types) {
+    for (const t of types){
       const chip = document.createElement("div"); chip.className="chip";
       const dot = document.createElement("span"); dot.className="dot"; dot.style.background = typeColors.get(t);
       const label = document.createElement("span"); label.textContent = t;
-      chip.append(dot,label);
-      legend.append(chip);
+      chip.append(dot,label); legend.append(chip);
     }
 
-    // --- Mapbox (create early; render pins even if Sigma fails) ---
+    // Init Mapbox
     mapboxgl.accessToken = MAPBOX_TOKEN;
     const map = new mapboxgl.Map({
-      container: 'map', style: 'mapbox://styles/mapbox/light-v11',
-      center: [24,56], zoom: 3
+      container: 'map',
+      style: 'mapbox://styles/mapbox/light-v11',
+      center: [24,56],
+      zoom: 3
     });
     map.addControl(new mapboxgl.NavigationControl());
 
-    function buildGeo(ids){
-      return {
-        type:"FeatureCollection",
-        features: Array.from(ids).map(id => {
-          const n = nodeById.get(id);
-          return { type:"Feature",
-            geometry:{ type:"Point", coordinates:[n.lon, n.lat] },
-            properties:{ id:n.id, name:n.name, type:n.type, color:colorFor(n) } };
-        })
-      };
-    }
+    const passesFilters = n => {
+      const typeOk = (typeSel.value === "All" || n.type === typeSel.value);
+      const tagOk  = (tagSel.value === "Any" || n.tags.includes(tagSel.value));
+      return typeOk && tagOk;
+    };
 
-    const passesType = n => typeSel.value === "All" ? true : n.type === typeSel.value;
-    const passesTag  = n => tagSel.value === "Any" ? true : n.tags.includes(tagSel.value);
+    // Wait for style to finish loading before adding layers/sources
+    map.on('load', () => {
+      setStatus(`Loaded <b>${nodes.length}</b> nodes.`);
 
-    function currentFilteredIds(){
-      const base = nodes.filter(n => passesType(n) && passesTag(n));
-      if (onlyA.checked && selectedId){
-        const seed = nodeById.get(selectedId);
-        if (seed && seed.type === "Alongsider"){
-          const allowed = new Set(base.map(n=>n.id));
-          const keep = new Set([selectedId]);
-          for (const e of edges){ if (e.source === selectedId) keep.add(e.target); if (e.target === selectedId) keep.add(e.source); }
-          return new Set([...keep].filter(id => allowed.has(id)));
-        }
-      }
-      return new Set(base.map(n=>n.id));
-    }
+      const addOrUpdate = (list) => {
+        const geo = {
+          type: "FeatureCollection",
+          features: list.map(n => ({
+            type: "Feature",
+            geometry: { type: "Point", coordinates: [n.lon, n.lat] },
+            properties: { id:n.id, name:n.name, type:n.type, color:colorFor(n) }
+          }))
+        };
 
-    function refreshMap(ids){
-      const data = buildGeo(ids);
-      if (map.getSource("nodes")) map.getSource("nodes").setData(data);
-      else {
-        map.on('load', () => {
-  map.addSource("nodes", { type: "geojson", data });
-  map.addLayer({
-    id: "nodes",
-    type: "circle",
-    source: "nodes",
-    paint: {
-      "circle-radius": 6,
-      "circle-stroke-width": 1,
-      "circle-color": ["get", "color"],
-      "circle-stroke-color": "#222"
-    }
-  });
+        if (map.getSource("nodes")) {
+          map.getSource("nodes").setData(geo);
+        } else {
+          map.addSource("nodes", { type: "geojson", data: geo });
+          map.addLayer({
+            id: "nodes",
+            type: "circle",
+            source: "nodes",
+            paint: {
+              "circle-radius": 6,
+              "circle-stroke-width": 1,
+              "circle-color": ["get", "color"],
+              "circle-stroke-color": "#222"
+            }
+          });
 
-  // you can also fitBounds, set markers, etc. here safely
-});
-
-          paint:{ "circle-radius":6, "circle-stroke-width":1, "circle-color":["get","color"], "circle-stroke-color":"#222" }});
-        map.on("click","nodes",(e)=>{ const f=e.features?.[0]; if (!f) return; selectNode(f.properties.id, true); });
-      }
-      if (data.features.length){
-        const b = new mapboxgl.LngLatBounds(); data.features.forEach(f => b.extend(f.geometry.coordinates));
-        map.fitBounds(b, {padding:40, maxZoom:6});
-      }
-    }
-
-    // --- Initially render pins FIRST ---
-    let selectedId = null;
-    const initialIds = currentFilteredIds();
-    refreshMap(initialIds);
-
-    // --- Try to initialize Sigma; if it fails, keep the map working ---
-    let renderer = null;
-    try {
-      const SigmaClass = window.Sigma || (window.sigma && window.sigma.Sigma);
-      if (!SigmaClass) throw new Error("Sigma UMD not available on window.Sigma");
-      const G = new graphology.Graph({type:"undirected", multi:false, allowSelfLoops:false});
-      for (const n of nodes) {
-        G.addNode(n.id, {label:n.name, x:Math.random(), y:Math.random(), size:6, color:colorFor(n), type:n.type});
-      }
-      for (const e of edges) {
-        if (G.hasNode(e.source) && G.hasNode(e.target) && !G.hasEdge(e.source, e.target)) {
-          G.addEdge(e.source, e.target, {relationship:e.relationship});
-        }
-      }
-      renderer = new SigmaClass(G, document.getElementById('net'), {
-        renderEdgeLabels:false, labelDensity:0.08, labelGridCellSize:60
-      });
-
-      function refreshSigma(ids){
-        renderer.setSetting("nodeReducer", (n,data)=> ids.has(n) ? data : {...data, hidden:true});
-        renderer.setSetting("edgeReducer", (e,data)=> {
-          const [a,b]=G.extremities(e); return (ids.has(a)&&ids.has(b)) ? data : {...data, hidden:true};
-        });
-        renderer.refresh(); highlightSelection();
-      }
-
-      function highlightSelection(){
-        const id = selectedId, neighbors = new Set(id?[id]:[]);
-        if (id && G.hasNode(id)) G.forEachNeighbor(id, nb => neighbors.add(nb));
-        renderer.setSetting("nodeReducer", (n,data)=> {
-          const hidden = data.hidden; if (!id) return data;
-          return hidden ? data : (neighbors.has(n) ? data : {...data, color:"#777"});
-        });
-        renderer.setSetting("edgeReducer", (e,data)=> {
-          if (!id) return data;
-          const [a,b]=G.extremities(e); return (neighbors.has(a)&&neighbors.has(b)) ? data : {...data, color:"#555"};
-        });
-        renderer.refresh();
-      }
-
-      renderer.on("clickNode", ({node}) => selectNode(node, true));
-
-      // Hook up filters to both map + sigma
-      for (const el of [typeSel, tagSel, onlyA]) el.addEventListener("change", ()=>{
-        const ids=currentFilteredIds(); refreshMap(ids); refreshSigma(ids);
-      });
-
-      // Initial sigma filter
-      refreshSigma(initialIds);
-
-    } catch (err){
-      console.warn("Sigma failed to initialize; continuing with map only.", err);
-      // Map will still work. Wire filters to map only:
-      for (const el of [typeSel, tagSel, onlyA]) el.addEventListener("change", ()=>{
-        const ids=currentFilteredIds(); refreshMap(ids);
-      });
-      // Leave the network panel empty.
-    }
-
-    function selectNode(id, fly){
-      selectedId = id;
-      const n = nodeById.get(id);
-      if (!n){
-        details.textContent = "(Click a pin or node to see details)";
-        return;
-      }
-      const linked = edges
-        .filter(e => e.source === id || e.target === id)
-        .map(e => e.source === id ? e.target : e.source)
-        .filter(x => nodeById.has(x))
-        .map(x => nodeById.get(x));
-
-      details.innerHTML = `<b>${n.name}</b> — <i>${n.type}</i>
+          map.on("click", "nodes", (e) => {
+            const f = e.features && e.features[0];
+            if (!f) return;
+            const n = nodeById.get(f.properties.id);
+            if (!n) return;
+            details.innerHTML = `<b>${n.name}</b> — <i>${n.type}</i>
 ${n.city ? n.city + ", " : ""}${n.country || ""}
 
 Tags: ${n.tags.join(", ") || "—"}
-${n.url ? `<a href="${n.url}" target="_blank" rel="noopener">Website</a>` : ""}
+${n.url ? `<a href="${n.url}" target="_blank" rel="noopener">Website</a>` : ""}`;
+            map.flyTo({center:[n.lon, n.lat], zoom:6});
+          });
+        }
 
-<b>Connections (${linked.length})</b>
-${linked.map(x => `• ${x.name} (${x.type})`).join("<br/>")}
-`;
-      if (fly) map.flyTo({center:[n.lon, n.lat], zoom:6});
-      // If sigma exists, update highlighting
-      if (renderer && typeof renderer.refresh === "function") {
-        const evt = new Event('change'); // trigger reducers via below call
-        typeSel.dispatchEvent(evt); // cheap way to recompute reducers
+        if (geo.features.length){
+          const b = new mapboxgl.LngLatBounds();
+          geo.features.forEach(f => b.extend(f.geometry.coordinates));
+          map.fitBounds(b, {padding:40, maxZoom:6});
+        }
+      };
+
+      // Initial render
+      if (!nodes.length){
+        setStatus(`No nodes after normalization. Check lat/lon and public TRUE/Yes/1.`, true);
+        return;
       }
-    }
+      addOrUpdate(nodes.filter(passesFilters));
 
-    // search & clear
-    search.addEventListener("input", () => {
-      const q = search.value.toLowerCase().trim(); if (!q) return;
-      const hit = nodes.find(n => n.name.toLowerCase().includes(q)); if (hit) selectNode(hit.id, true);
+      // Wire filters & search
+      const rerender = () => addOrUpdate(nodes.filter(passesFilters));
+      typeSel.addEventListener("change", rerender);
+      tagSel.addEventListener("change", rerender);
+
+      search.addEventListener("input", () => {
+        const q = search.value.toLowerCase().trim();
+        const hit = nodes.find(n => n.name.toLowerCase().includes(q));
+        if (hit) {
+          details.innerHTML = `<b>${hit.name}</b> — <i>${hit.type}</i>
+${hit.city ? hit.city + ", " : ""}${hit.country || ""}
+
+Tags: ${hit.tags.join(", ") || "—"}
+${hit.url ? `<a href="${hit.url}" target="_blank" rel="noopener">Website</a>` : ""}`;
+          map.flyTo({center:[hit.lon, hit.lat], zoom:6});
+        }
+      });
+
+      clearSel.addEventListener("click", () => {
+        details.textContent = "(Click a pin to see details)";
+        search.value = "";
+        rerender();
+      });
     });
-    clearSel.addEventListener("click", ()=>{ selectedId=null; details.textContent="(Click a pin or node to see details)"; typeSel.dispatchEvent(new Event('change')); });
-
   })();
   </script>
 </body>
