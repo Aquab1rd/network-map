@@ -3,14 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Alongside Ministries — Map (Stable)</title>
+  <title>Alongside Ministries — Robust 2D Map</title>
 
-  <!-- Mapbox CSS -->
   <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet" />
-
   <style>
     :root { --bg:#0f1115; --panel:#151922; --ink:#e8ebf2; --muted:#9aa3b2; --accent:#3aa0ff; }
-    html, body { height:100%; margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+    html, body { height:100%; margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;}
     .wrap { max-width:1200px; margin:0 auto; padding:20px; }
     h1 { font-size:20px; margin:4px 0 8px; font-weight:700; }
     .hint { color:var(--muted); font-size:12px; margin:0 0 12px; }
@@ -33,7 +31,7 @@
 </head>
 <body>
   <div class="wrap">
-    <h1>Alongside Ministries — Interactive Map</h1>
+    <h1>Alongside Ministries — Interactive 2D Map</h1>
     <div id="status" class="hint">Loading data…</div>
 
     <div class="controls card">
@@ -59,13 +57,11 @@
     </div>
   </div>
 
-  <!-- libs -->
   <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
-
   <script>
   (async function(){
-    // LIVE SHEETS + TOKEN (yours)
+    // === LIVE SHEETS + TOKEN ===
     const NODES_CSV_URL = "https://docs.google.com/spreadsheets/d/1MSwF46BkDjRhOdHd4Pw0ArCVgvdcgDACWvyswFq8XI4/gviz/tq?tqx=out:csv&sheet=Nodes";
     const EDGES_CSV_URL = "https://docs.google.com/spreadsheets/d/1eQrmiVA4wxf6J79SZkyhZb-vEAyX3yxfapen113MSrA/gviz/tq?tqx=out:csv&sheet=Edges";
     const MAPBOX_TOKEN  = "pk.eyJ1IjoiYXF1YWIxcmQiLCJhIjoiY21ndjl5Y2RzMGN2azJsc2J4d3d2N2tyeSJ9.JApvZZEs_kiwNl4Y9-aRaQ";
@@ -78,12 +74,11 @@
     const legend   = document.getElementById('legend');
     const details  = document.getElementById('details');
 
-    const setStatus = (msg, isError=false) => {
+    function setStatus(msg, isError=false){
       statusEl.innerHTML = isError ? `<span class="error">${msg}</span>` : msg;
-      console.log(msg);
-    };
+    }
 
-    // Robust CSV helpers
+    // --- CSV loader ---
     async function loadCSV(url){
       const r = await fetch(url, {cache:"no-store"});
       if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
@@ -93,20 +88,19 @@
     const normKey = k => String(k||'').replace(/^\ufeff/,'').trim().toLowerCase();
     const toNum = v => {
       if (v == null) return NaN;
-      const s = String(v).trim().replace(',', '.'); // comma decimals ok
+      const s = String(v).trim().replace(',', '.');
       const n = Number(s);
       return Number.isFinite(n) ? n : NaN;
     };
-    const findKey = (headers, aliases) => {
+    function findKey(headers, aliases){
       const H = headers.map(normKey);
       for (const a of aliases){
         const i = H.indexOf(a);
         if (i !== -1) return headers[i];
       }
       return null;
-    };
+    }
 
-    // Load data
     let rawNodes, rawEdges;
     try {
       [rawNodes, rawEdges] = await Promise.all([loadCSV(NODES_CSV_URL), loadCSV(EDGES_CSV_URL)]);
@@ -115,20 +109,18 @@
       return;
     }
 
-    // Detect headers
     const nodeHeaders = Object.keys(rawNodes[0] || {});
     const latKey = findKey(nodeHeaders, ["lat","latitude","y","coord_lat","latitud"]);
     const lonKey = findKey(nodeHeaders, ["lon","lng","long","longitude","x","coord_lon","longitud"]);
     const pubKey = findKey(nodeHeaders, ["public","visible","publish","is_public"]);
 
-    // Normalize nodes
     const nodes = rawNodes.map(row => {
       const lat = latKey ? toNum(row[latKey]) : NaN;
       const lon = lonKey ? toNum(row[lonKey]) : NaN;
       let vis = true;
       if (pubKey){
-        const v = String(row[pubKey] ?? "").trim().toUpperCase();
-        vis = (v === "" || v === "TRUE" || v === "YES" || v === "1");
+        const raw = String(row[pubKey] ?? "").trim().toUpperCase();
+        vis = (raw === "" || raw === "TRUE" || raw === "YES" || raw === "1");
       }
       return {
         id: String(row.id ?? row.ID ?? row.Id ?? "").trim() || String(row.name ?? "").trim(),
@@ -143,9 +135,12 @@
       };
     }).filter(n => n.id && Number.isFinite(n.lat) && Number.isFinite(n.lon) && n.public);
 
-    const nodeById = new Map(nodes.map(n => [n.id, n]));
+    if (!nodes.length){
+      setStatus(`No valid nodes found. Check lat/lon columns and 'public' values.`, true);
+      return;
+    }
 
-    // UI: filters + legend
+    const nodeById = new Map(nodes.map(n => [n.id, n]));
     const types = Array.from(new Set(nodes.map(n => n.type))).sort();
     const allTags = Array.from(new Set(nodes.flatMap(n => n.tags))).sort();
     for (const t of types) typeSel.append(new Option(t, t));
@@ -160,89 +155,82 @@
       chip.append(dot,label); legend.append(chip);
     }
 
-    // Init Mapbox
+    // === 2D FLAT MAP ===
     mapboxgl.accessToken = MAPBOX_TOKEN;
     const map = new mapboxgl.Map({
       container: 'map',
       style: 'mapbox://styles/mapbox/light-v11',
       center: [24,56],
-      zoom: 3
+      zoom: 3,
+      projection: 'equalEarth' // flat projection; try 'mercator' or 'naturalEarth' if you prefer
     });
     map.addControl(new mapboxgl.NavigationControl());
 
-    const passesFilters = n => {
-      const typeOk = (typeSel.value === "All" || n.type === typeSel.value);
-      const tagOk  = (tagSel.value === "Any" || n.tags.includes(tagSel.value));
-      return typeOk && tagOk;
-    };
-
-    // Wait for style to finish loading before adding layers/sources
     map.on('load', () => {
-      setStatus(`Loaded <b>${nodes.length}</b> nodes.`);
+      // force 2D feel (no tilt/rotation)
+      map.setPitch(0);
+      map.setBearing(0);
+      map.dragRotate.disable();
+      map.touchZoomRotate.disableRotation();
+      // Optional: make interactions simpler
+      // map.boxZoom.disable();
+      // map.doubleClickZoom.disable();
+      // map.scrollZoom.disable();
 
-      const addOrUpdate = (list) => {
-        const geo = {
-          type: "FeatureCollection",
-          features: list.map(n => ({
-            type: "Feature",
-            geometry: { type: "Point", coordinates: [n.lon, n.lat] },
-            properties: { id:n.id, name:n.name, type:n.type, color:colorFor(n) }
-          }))
-        };
-
-        if (map.getSource("nodes")) {
-          map.getSource("nodes").setData(geo);
-        } else {
-          map.addSource("nodes", { type: "geojson", data: geo });
-          map.addLayer({
-            id: "nodes",
-            type: "circle",
-            source: "nodes",
-            paint: {
-              "circle-radius": 6,
-              "circle-stroke-width": 1,
-              "circle-color": ["get", "color"],
-              "circle-stroke-color": "#222"
-            }
-          });
-
-          map.on("click", "nodes", (e) => {
-            const f = e.features && e.features[0];
-            if (!f) return;
-            const n = nodeById.get(f.properties.id);
-            if (!n) return;
-            details.innerHTML = `<b>${n.name}</b> — <i>${n.type}</i>
-${n.city ? n.city + ", " : ""}${n.country || ""}
-
-Tags: ${n.tags.join(", ") || "—"}
-${n.url ? `<a href="${n.url}" target="_blank" rel="noopener">Website</a>` : ""}`;
-            map.flyTo({center:[n.lon, n.lat], zoom:6});
-          });
-        }
-
-        if (geo.features.length){
-          const b = new mapboxgl.LngLatBounds();
-          geo.features.forEach(f => b.extend(f.geometry.coordinates));
-          map.fitBounds(b, {padding:40, maxZoom:6});
-        }
+      // Build initial GeoJSON
+      const geo = {
+        type: "FeatureCollection",
+        features: nodes.map(n => ({
+          type: "Feature",
+          geometry: { type: "Point", coordinates: [n.lon, n.lat] },
+          properties: { id: n.id, name: n.name, type: n.type, color: colorFor(n) }
+        }))
       };
 
-      // Initial render
-      if (!nodes.length){
-        setStatus(`No nodes after normalization. Check lat/lon and public TRUE/Yes/1.`, true);
-        return;
-      }
-      addOrUpdate(nodes.filter(passesFilters));
+      map.addSource("nodes", { type:"geojson", data: geo });
+      map.addLayer({
+        id:"nodes",
+        type:"circle",
+        source:"nodes",
+        paint:{
+          "circle-radius":6,
+          "circle-stroke-width":1,
+          "circle-color":["get","color"],
+          "circle-stroke-color":"#222"
+        }
+      });
 
-      // Wire filters & search
-      const rerender = () => addOrUpdate(nodes.filter(passesFilters));
+      if (geo.features.length){
+        const b = new mapboxgl.LngLatBounds();
+        geo.features.forEach(f => b.extend(f.geometry.coordinates));
+        map.fitBounds(b, {padding:40, maxZoom:6});
+      }
+
+      // Filtering and search
+      function passesFilters(n){
+        const typeOk = (typeSel.value === "All" || n.type === typeSel.value);
+        const tagOk  = (tagSel.value === "Any" || n.tags.includes(tagSel.value));
+        return typeOk && tagOk;
+      }
+
+      function rerender(){
+        const filtered = nodes.filter(passesFilters);
+        map.getSource("nodes").setData({
+          type:"FeatureCollection",
+          features: filtered.map(n => ({
+            type:"Feature",
+            geometry:{type:"Point",coordinates:[n.lon,n.lat]},
+            properties:{id:n.id,name:n.name,type:n.type,color:colorFor(n)}
+          }))
+        });
+      }
+
       typeSel.addEventListener("change", rerender);
       tagSel.addEventListener("change", rerender);
-
       search.addEventListener("input", () => {
         const q = search.value.toLowerCase().trim();
         const hit = nodes.find(n => n.name.toLowerCase().includes(q));
-        if (hit) {
+        if (hit){
           details.innerHTML = `<b>${hit.name}</b> — <i>${hit.type}</i>
 ${hit.city ? hit.city + ", " : ""}${hit.country || ""}
 
@@ -251,12 +239,22 @@ ${hit.url ? `<a href="${hit.url}" target="_blank" rel="noopener">Website</a>` : 
           map.flyTo({center:[hit.lon, hit.lat], zoom:6});
         }
       });
+      clearSel.addEventListener("click", ()=>{ details.textContent="(Click a pin to see details)"; search.value=""; rerender(); });
 
-      clearSel.addEventListener("click", () => {
-        details.textContent = "(Click a pin to see details)";
-        search.value = "";
-        rerender();
+      map.on("click","nodes",(e)=>{
+        const f = e.features?.[0];
+        if (!f) return;
+        const n = nodeById.get(f.properties.id);
+        if (!n) return;
+        details.innerHTML = `<b>${n.name}</b> — <i>${n.type}</i>
+${n.city ? n.city + ", " : ""}${n.country || ""}
+
+Tags: ${n.tags.join(", ") || "—"}
+${n.url ? `<a href="${n.url}" target="_blank" rel="noopener">Website</a>` : ""}`;
+        map.flyTo({center:[n.lon, n.lat], zoom:6});
       });
+
+      setStatus(`Loaded <b>${nodes.length}</b> nodes.`);
     });
   })();
   </script>
