@@ -94,9 +94,10 @@
     const NODES_CSV_URL = "https://docs.google.com/spreadsheets/d/1MSwF46BkDjRhOdHd4Pw0ArCVgvdcgDACWvyswFq8XI4/gviz/tq?tqx=out:csv&sheet=Nodes";
     const EDGES_CSV_URL = "https://docs.google.com/spreadsheets/d/1eQrmiVA4wxf6J79SZkyhZb-vEAyX3yxfapen113MSrA/gviz/tq?tqx=out:csv&sheet=Edges";
     const MAPBOX_TOKEN  = "pk.eyJ1IjoiYXF1YWIxcmQiLCJhIjoiY21ndjl5Y2RzMGN2azJsc2J4d3d2N2tyeSJ9.JApvZZEs_kiwNl4Y9-aRaQ";
+
     const Z_NODE_FOCUS = 11;
 
-    // UI
+    // UI refs
     const statusEl = document.getElementById('status');
     const typeSel  = document.getElementById('typeFilter');
     const tagSel   = document.getElementById('tagFilter');
@@ -124,13 +125,14 @@
     const toNum = v => { if(v==null) return NaN; const n=Number(String(v).trim().replace(',','.')); return Number.isFinite(n)? n: NaN; };
     const findKey = (headers, aliases)=>{ const H=headers.map(normKey); for(const a of aliases){ const i=H.indexOf(a); if(i!=-1) return headers[i]; } return null; };
 
-    // Relationship normalization (robust)
+    // Robust relationship normalization
     function normRel(v){
       const s = String(v ?? "").trim().toLowerCase();
       if (!s) return "linked";
-      if (["lead","leads","leader","leads/mentors"].includes(s)) return "leads";
+      if (["lead","leads","leader","mentors","leads/mentors"].includes(s)) return "leads";
       if (["support","supports","supporter","funds"].includes(s)) return "supports";
       if (["partner","partners","partner org","partnership"].includes(s)) return "partners";
+      if (["link","linked","connection"].includes(s)) return "linked";
       return s;
     }
 
@@ -222,47 +224,6 @@
     };
     const relTypes = Array.from(new Set(uniqEdges.map(e => e.relationship))).sort();
 
-    // ==== SINGLE-SELECT CHECKBOX GROUP ====
-    const selectedRels = new Set(); // 0 = show all
-    function buildRelChecks(){
-      relChecks.innerHTML = "";
-      relTypes.forEach(relKey=>{
-        const st = REL_STYLE[relKey] || { color:"#9aa3b2", label: relKey };
-        const id = `rel_${relKey}`;
-        const wrap = document.createElement("label");
-        wrap.style.color = st.color;
-        wrap.innerHTML = `<input type="checkbox" id="${id}" data-rel="${relKey}"> <span>${st.label}</span>`;
-        relChecks.appendChild(wrap);
-      });
-
-      relChecks.querySelectorAll('input[type="checkbox"]').forEach(cb=>{
-        cb.addEventListener("change", (e)=>{
-          const rel = e.target.getAttribute("data-rel");
-          if (e.target.checked){
-            // single-select: uncheck others, keep only this
-            relChecks.querySelectorAll('input[type="checkbox"]').forEach(other=>{
-              if (other !== e.target) other.checked = false;
-            });
-            selectedRels.clear();
-            selectedRels.add(rel);
-          } else {
-            // none checked -> show all
-            selectedRels.clear();
-          }
-          updateEdges(); // redraw with new selection
-        });
-      });
-    }
-    buildRelChecks();
-
-    // Edge legend
-    for (const r of relTypes){
-      const st = REL_STYLE[r] || REL_STYLE.linked;
-      const span = document.createElement("span");
-      span.innerHTML = `<span class="line" style="border-top-color:${st.color}"></span> ${st.label || r}`;
-      edgeLegend.append(span);
-    }
-
     // Map
     mapboxgl.accessToken = MAPBOX_TOKEN;
     const map = new mapboxgl.Map({
@@ -273,7 +234,6 @@
     map.addControl(new mapboxgl.NavigationControl(), 'top-left');
     map.addControl(new mapboxgl.AttributionControl({ compact:true }), 'bottom-right');
 
-    // Icon helpers
     function makeIconCanvas(shape, fill, size=48, stroke="#111"){
       const c=document.createElement("canvas"); c.width=c.height=size;
       const ctx=c.getContext("2d");
@@ -306,11 +266,6 @@
       const degOk  = (degreeSel.value==="All"||n.degree===degreeSel.value);
       return typeOk && tagOk && degOk;
     }
-    function relAllowed(rel){
-      // 0 checked => show all; else only selected
-      if (selectedRels.size === 0) return true;
-      return selectedRels.has(rel);
-    }
 
     function nodeFeatures(list, iconNameForType){
       return list.map(n => ({
@@ -324,11 +279,11 @@
       return `${a[0]}|${a[1]}|${e.relationship}`;
     }
 
-    function makeEdgeFeatures(allowedIds, selectedNodeId=null, selectedEdgeKey=null){
+    function makeEdgeFeatures(allowedIds, selectedNodeId=null, selectedEdgeKey=null, selectedRels){
       const feats=[];
       for(const e of uniqEdges){
         const rel = e.relationship;
-        if(!relAllowed(rel)) continue;
+        if (selectedRels.size && !selectedRels.has(rel)) continue; // filter here
         if(!allowedIds.has(e.source)||!allowedIds.has(e.target)) continue;
         const a=nodeById.get(e.source), b=nodeById.get(e.target);
         const st=REL_STYLE[rel] || REL_STYLE.linked;
@@ -379,28 +334,31 @@
       return `<b>${a?.name || f.properties.source}</b> — ${label} — <b>${b?.name || f.properties.target}</b>${since?` (since ${since})`:""}${extra}`;
     }
 
-    // Map & layers
+    // ========== MAP LOAD ==========
     map.on('load', () => {
       map.setPitch(0); map.setBearing(0); map.dragRotate.disable(); map.touchZoomRotate.disableRotation();
 
+      // Icons + legend
       if(!map.hasImage("fallback")) addCanvasAsImage(map,"fallback",makeIconCanvas("circle","#999",48));
       const iconNameForType = new Map();
       for (const t of types){
-        const shape = SHAPE_BY_TYPE.get(t) || "circle";
+        const shape = SHAPE_BY_TYPE.get(t) || fallbackShape;
         const color = typeColors.get(t) || "#999";
         const name = `marker-${t.replace(/\s+/g,'_')}`;
         addCanvasAsImage(map, name, makeIconCanvas(shape, color, 48));
         iconNameForType.set(t, name);
 
         const chip=document.createElement("div"); chip.className="chip";
-        const img=document.createElement("img"); img.src=makeIconCanvas(shape,color,22).toDataURL("image/png");
-        chip.append(img); const lbl=document.createElement("span"); lbl.textContent=t||"(Uncategorized)";
+        const img=makeIconCanvas(shape,color,22); const tag=document.createElement("img"); tag.src=img.toDataURL("image/png");
+        chip.append(tag); const lbl=document.createElement("span"); lbl.textContent=t||"(Uncategorized)";
         chip.append(lbl); legend.append(chip);
       }
 
+      // Initial nodes
       let lastFilteredNodes = nodes.filter(passesNodeFilters);
       const initialNodeFeatures = nodeFeatures(lastFilteredNodes, iconNameForType);
 
+      // Sources
       map.addSource("nodes", {
         type:"geojson",
         data:{ type:"FeatureCollection", features: initialNodeFeatures },
@@ -408,6 +366,7 @@
       });
       map.addSource("edges", { type:"geojson", data:{ type:"FeatureCollection", features: [] }});
 
+      // Layers
       map.addLayer({ id:"clusters", type:"circle", source:"nodes", filter:["has","point_count"],
         paint:{ "circle-color":"#273043","circle-stroke-color":"#3a4863","circle-stroke-width":1.5,
                 "circle-radius":["step",["get","point_count"],14,10,18,25,24,50,30] }});
@@ -429,8 +388,10 @@
       }
       fitTo(initialNodeFeatures);
 
-      function currentAllowedIds(){ return new Set(lastFilteredNodes.map(n=>n.id)); }
-      function updateEdges(selectedNodeId=null, selectedEdgeKey=null){
+      const currentAllowedIds = ()=> new Set(lastFilteredNodes.map(n=>n.id));
+
+      // Define update functions in this scope
+      const updateEdges = (selectedNodeId=null, selectedEdgeKey=null)=>{
         if (!toggleLines.checked){
           map.getSource("edges").setData({ type:"FeatureCollection", features: [] });
           map.setLayoutProperty("edges","visibility","none");
@@ -438,24 +399,54 @@
           return;
         }
         const ids = currentAllowedIds();
-        const feats = makeEdgeFeatures(ids, selectedNodeId, selectedEdgeKey);
+        const feats = makeEdgeFeatures(ids, selectedNodeId, selectedEdgeKey, selectedRels);
         map.getSource("edges").setData({ type:"FeatureCollection", features: feats });
         map.setLayoutProperty("edges","visibility","visible");
         map.setLayoutProperty("edges-hit","visibility","visible");
-      }
-      function refreshNodes(){
+      };
+
+      const refreshNodes = ()=>{
         lastFilteredNodes = nodes.filter(passesNodeFilters);
         const feats = nodeFeatures(lastFilteredNodes, iconNameForType);
         map.getSource("nodes").setData({ type:"FeatureCollection", features: feats });
         fitTo(feats);
         updateEdges();
-      }
+      };
 
+      // Build the RELATIONSHIP CHECKBOXES *now* so they can call updateEdges()
+      const selectedRels = new Set(); // 0 = show all
+      relChecks.innerHTML = "";
+      relTypes.forEach(relKey=>{
+        const st = REL_STYLE[relKey] || { color:"#9aa3b2", label: relKey };
+        const wrap = document.createElement("label");
+        wrap.style.color = st.color;
+        wrap.innerHTML = `<input type="checkbox" data-rel="${relKey}"> <span>${st.label}</span>`;
+        relChecks.appendChild(wrap);
+      });
+      relChecks.querySelectorAll('input[type="checkbox"]').forEach(cb=>{
+        cb.addEventListener("change", (e)=>{
+          const rel = e.target.getAttribute("data-rel");
+          if (e.target.checked){
+            // single-select: uncheck others, keep only this
+            relChecks.querySelectorAll('input[type="checkbox"]').forEach(other=>{
+              if (other !== e.target) other.checked = false;
+            });
+            selectedRels.clear();
+            selectedRels.add(rel);
+          } else {
+            selectedRels.clear(); // none checked => show all
+          }
+          updateEdges(); // ← immediate redraw here
+        });
+      });
+
+      // Wire filters
       typeSel.addEventListener("change", refreshNodes);
       tagSel.addEventListener("change", refreshNodes);
       degreeSel.addEventListener("change", refreshNodes);
       toggleLines.addEventListener("change", ()=>updateEdges());
 
+      // Search
       search.addEventListener("input", () => {
         const q = search.value.toLowerCase().trim();
         const hit = lastFilteredNodes.find(n => n.name.toLowerCase().includes(q));
@@ -518,6 +509,7 @@
         hideClusterList();
       });
 
+      // First draw
       updateEdges();
       setStatus(`Loaded <b>${nodes.length}</b> nodes and <b>${uniqEdges.length}</b> edges.`);
     });
