@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Alongside Ministries — Map (2D + Shapes + Edges + Clusters + Degree + Multi-Rel)</title>
+  <title>Alongside Ministries — Map (Manual GMaps + Clusters + Edges + Filters)</title>
 
   <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet" />
   <style>
@@ -96,6 +96,7 @@
     const EDGES_CSV_URL = "https://docs.google.com/spreadsheets/d/1eQrmiVA4wxf6J79SZkyhZb-vEAyX3yxfapen113MSrA/gviz/tq?tqx=out:csv&sheet=Edges";
     const MAPBOX_TOKEN  = "pk.eyJ1IjoiYXF1YWIxcmQiLCJhIjoiY21ndjl5Y2RzMGN2azJsc2J4d3d2N2tyeSJ9.JApvZZEs_kiwNl4Y9-aRaQ";
 
+    // UI refs
     const statusEl = document.getElementById('status');
     const typeSel  = document.getElementById('typeFilter');
     const tagSel   = document.getElementById('tagFilter');
@@ -134,6 +135,7 @@
     const lonKey = findKey(nodeHeaders, ["lon","lng","long","longitude","x","coord_lon","longitud"]);
     const pubKey = findKey(nodeHeaders, ["public","visible","publish","is_public"]);
     const degKey = findKey(nodeHeaders, ["degree","deg","tier"]);
+    const gmapsKey = findKey(nodeHeaders, ["gmaps","gmaps_link","googlemaps"]);
 
     function normalizeDegree(v){
       const s=String(v??"").trim().toLowerCase();
@@ -141,13 +143,12 @@
       if (s==="2" || s==="second" || s==="indirect") return "2";
       return "1"; // default to first if unset
     }
-    function buildGMapsLink(row, lat, lon){
-      const url = String(row.gmaps ?? row.gmap ?? row.googlemaps ?? "").trim();
-      if (url) return url;
-      if (Number.isFinite(lat) && Number.isFinite(lon)) {
-        return `https://www.google.com/maps?q=${lat},${lon}`;
-      }
-      return "";
+
+    // IMPORTANT: manual-only gmaps (no auto from lat/lon)
+    function readManualGMaps(row){
+      if (!gmapsKey) return "";
+      const val = String(row[gmapsKey] ?? "").trim();
+      return val; // may be "" → hidden
     }
 
     const nodes = rawNodes.map(row => {
@@ -166,7 +167,7 @@
         lat, lon,
         tags: String(row.tags ?? "").split(/[;,]/).map(t=>t.trim()).filter(Boolean),
         url: row.url ?? "",
-        gmaps: buildGMapsLink(row, lat, lon),
+        gmaps: readManualGMaps(row), // manual-only link
         public: vis,
         degree
       };
@@ -174,7 +175,7 @@
     if (!nodes.length){ setStatus(`No valid nodes. Check lat/lon + 'public' values.`, true); return; }
     const nodeById = new Map(nodes.map(n => [n.id, n]));
 
-    // Adjacency for second-degree text
+    // Adjacency (for indirect B→C text)
     const outAdj = new Map(), inAdj = new Map();
     const addToSet = (map, key, val)=>{ if(!map.has(key)) map.set(key, new Set()); map.get(key).add(val); };
 
@@ -189,6 +190,7 @@
       return { source:s, target:t, relationship: rel || "linked", since, public:isPublic };
     }).filter(e => e.public && nodeById.has(e.source) && nodeById.has(e.target) && e.source !== e.target);
 
+    // de-dupe
     const seen = new Set(), uniqEdges=[];
     for (const e of edgesRaw){
       const [a,b] = e.source < e.target ? [e.source,e.target] : [e.target,e.source];
@@ -211,9 +213,8 @@
     const typeColors = new Map(types.map((t,i)=>[t, palette[i % palette.length]]));
     const SHAPE_BY_TYPE = new Map([["Alongsider","circle"],["Church","square"],["Partner","diamond"],["Supporter","triangle"]]);
     const fallbackShape="circle";
-    const colorFor = n => typeColors.get(n.type) || "#999";
 
-    // Relationship styles
+    // Relationship styles + checkboxes
     const REL_STYLE = {
       leads:     { color:"#e15759", width:2.5, label:"Leads" },
       supports:  { color:"#59a14f", width:2.5, label:"Supports" },
@@ -222,8 +223,7 @@
     };
     const relTypes = Array.from(new Set(uniqEdges.map(e => (e.relationship||"linked").toLowerCase()))).sort();
 
-    // Build checkbox UI for relationships
-    const selectedRels = new Set(); // empty = show all
+    const selectedRels = new Set(); // empty => show all
     function addRelCheck(relKey){
       const st = REL_STYLE[relKey] || { color:"#9aa3b2", label: relKey };
       const id = `rel_${relKey}`;
@@ -239,7 +239,6 @@
     }
     relTypes.forEach(addRelCheck);
 
-    // Edge legend
     for (const r of relTypes){
       const st = REL_STYLE[r] || REL_STYLE.linked;
       const span = document.createElement("span");
@@ -255,7 +254,7 @@
     });
     map.addControl(new mapboxgl.NavigationControl());
 
-    // Icon drawing
+    // Icon drawing + registration
     function makeIconCanvas(shape, fill, size=48, stroke="#111"){
       const c=document.createElement("canvas"); c.width=c.height=size;
       const ctx=c.getContext("2d");
@@ -263,8 +262,6 @@
       ctx.lineWidth=Math.max(2,size*0.05);
       ctx.strokeStyle=stroke; ctx.fillStyle=fill;
       const r=size*0.33, cx=size/2, cy=size/2;
-
-      const shapeName = (SHAPE_BY_TYPE.get(shape) || shape); // (not used, kept for clarity)
       ctx.beginPath();
       if(shape==="circle"){ ctx.arc(cx,cy,r,0,Math.PI*2); }
       else if(shape==="square"){ const s=r*1.6; ctx.rect(cx-s/2,cy-s/2,s,s); }
@@ -291,7 +288,7 @@
       return typeOk && tagOk && degOk;
     }
     function relAllowed(rel){
-      if (selectedRels.size === 0) return true; // no boxes checked -> show all
+      if (selectedRels.size === 0) return true;
       return selectedRels.has(rel);
     }
 
@@ -305,6 +302,7 @@
 
     let selectedNodeId = null;
     let selectedEdgeKey = null;
+    const nodeColor = n => typeColors.get(n.type) || "#999";
     function edgeKey(e){
       const a = e.source < e.target ? e.source : e.target;
       const b = e.source < e.target ? e.target : e.source;
@@ -340,8 +338,8 @@
       const lines = [];
       lines.push(`<b>${n.name}</b> — <i>${n.type}</i>`);
       lines.push(`${n.city ? n.city + ", " : ""}${n.country || ""}`);
-      if (n.tags.length) lines.push(`Tags: ${n.tags.join(", ")}`);
-      if (n.url) lines.push(`<a href="${n.url}" target="_blank" rel="noopener">Website</a>`);
+      if (n.tags?.length) lines.push(`Tags: ${n.tags.join(", ")}`);
+      if (n.url)   lines.push(`<a href="${n.url}" target="_blank" rel="noopener">Website</a>`);
       if (n.gmaps) lines.push(`<a href="${n.gmaps}" target="_blank" rel="noopener">Open in Google Maps</a>`);
       lines.push(`Degree: ${n.degree==="1"?"First (direct)":"Second (indirect)"}`);
       return lines.join("\n");
@@ -375,7 +373,7 @@
         <div class="cluster-item" data-id="${n.id}">
           <div>
             <div><b>${n.name}</b> — <i>${n.type}</i></div>
-            <div class="cluster-tags">${n.city ? n.city + ", " : ""}${n.country || ""}${n.tags.length?` · ${n.tags.join(", ")}`:""}</div>
+            <div class="cluster-tags">${n.city ? n.city + ", " : ""}${n.country || ""}${n.tags?.length?` · ${n.tags.join(", ")}`:""}</div>
           </div>
           <div>↗</div>
         </div>
@@ -384,21 +382,21 @@
       clusterList.querySelectorAll(".cluster-item").forEach(el=>{
         el.addEventListener("click", ()=>{
           const id = el.getAttribute("data-id");
-          selectNode(id, true);
+          selectNode(id, true); // fly + highlight
         });
       });
     }
     function hideClusterList(){ clusterPanel.style.display="none"; clusterList.innerHTML=""; }
 
     map.on('load', () => {
+      // keep it 2D
       map.setPitch(0); map.setBearing(0); map.dragRotate.disable(); map.touchZoomRotate.disableRotation();
-      if(!map.hasImage("fallback")) addCanvasAsImage(map,"fallback",makeIconCanvas("circle","#999",48));
 
-      // Type icons + legend
+      // Register icons + legend
+      if(!map.hasImage("fallback")) addCanvasAsImage(map,"fallback",makeIconCanvas("circle","#999",48));
       const iconNameForType = new Map();
       for (const t of types){
-        const shape =
-          (t==="Alongsider"?"circle": t==="Church"?"square": t==="Partner"?"diamond": t==="Supporter"?"triangle":"circle");
+        const shape = SHAPE_BY_TYPE.get(t) || fallbackShape;
         const color = typeColors.get(t) || "#999";
         const name = `marker-${t.replace(/\s+/g,'_')}`;
         addCanvasAsImage(map, name, makeIconCanvas(shape, color, 48));
@@ -423,6 +421,7 @@
         paint:{ "line-color":["get","color"], "line-width":["get","width"], "line-opacity":["get","opacity"] },
         layout:{ "line-cap":"round", "line-join":"round" }
       });
+      // fat invisible hit layer for easy clicking
       map.addLayer({
         id:"edges-hit",
         type:"line",
@@ -465,7 +464,7 @@
         paint: { "text-color": "#e8ebf2" }
       });
 
-      // Unclustered markers
+      // Unclustered markers (use custom icons)
       map.addLayer({
         id:"nodes",
         type:"symbol",
@@ -481,15 +480,17 @@
       }
       fitTo(initialNodeFeatures);
 
-      // Refresh
+      // Refresh with filters / toggles
       function refresh(){
         selectedNodeId=null; selectedEdgeKey=null; hideClusterList();
         const list = nodes.filter(passesNodeFilters);
         const feats = nodeFeatures(list, iconNameForType);
         const ids = new Set(list.map(n=>n.id));
 
+        // nodes (cluster source)
         map.getSource("nodes").setData({ type:"FeatureCollection", features: feats });
 
+        // edges
         if (toggleLines.checked) {
           const edgeFeats = edgeFeatures(ids);
           map.getSource("edges").setData({ type:"FeatureCollection", features: edgeFeats });
@@ -509,6 +510,7 @@
       degreeSel.addEventListener("change", refresh);
       toggleLines.addEventListener("change", refresh);
 
+      // Search
       search.addEventListener("input", () => {
         const q = search.value.toLowerCase().trim();
         const hit = nodes.find(n => passesNodeFilters(n) && n.name.toLowerCase().includes(q));
@@ -516,6 +518,7 @@
       });
       clearSel.addEventListener("click", ()=>{ search.value=""; details.textContent="(Click a pin or a line to see details)"; refresh(); });
 
+      // Node select (also called by cluster list)
       function selectNode(id, keepClusterOpen=false){
         selectedNodeId = id; selectedEdgeKey=null;
         const n = nodeById.get(id); if(!n) return;
@@ -535,11 +538,12 @@
         selectNode(f.properties.id);
       });
 
+      // Cluster click → show list and zoom; clicking a list item flies to node (and highlights)
       map.on("click","clusters", (e) => {
         const features = map.queryRenderedFeatures(e.point, { layers: ["clusters"] });
         const clusterId = features[0]?.properties?.cluster_id;
         if (clusterId == null) return;
-        map.getSource("nodes").getClusterLeaves(clusterId, 100, 0, (err, leaves) => {
+        map.getSource("nodes").getClusterLeaves(clusterId, 200, 0, (err, leaves) => {
           if (err || !leaves) return;
           const items = leaves.map(l => nodeById.get(l.properties.id)).filter(Boolean);
           showClusterList(`This area has ${items.length} items`, items);
@@ -550,6 +554,7 @@
         });
       });
 
+      // Clickable edges (with indirect B→C text)
       map.on("click","edges-hit",(e)=>{
         const f=e.features?.[0]; if(!f) return;
         selectedNodeId=null;
