@@ -91,13 +91,11 @@
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   <script>
   (async function(){
-    // === LIVE SHEETS + TOKEN ===
     const NODES_CSV_URL = "https://docs.google.com/spreadsheets/d/1MSwF46BkDjRhOdHd4Pw0ArCVgvdcgDACWvyswFq8XI4/gviz/tq?tqx=out:csv&sheet=Nodes";
     const EDGES_CSV_URL = "https://docs.google.com/spreadsheets/d/1eQrmiVA4wxf6J79SZkyhZb-vEAyX3yxfapen113MSrA/gviz/tq?tqx=out:csv&sheet=Edges";
     const MAPBOX_TOKEN  = "pk.eyJ1IjoiYXF1YWIxcmQiLCJhIjoiY21ndjl5Y2RzMGN2azJsc2J4d3d2N2tyeSJ9.JApvZZEs_kiwNl4Y9-aRaQ";
 
-    // ZOOM CONSTANTS
-    const Z_NODE_FOCUS = 11; // must be > clusterMaxZoom to ensure de-cluster
+    const Z_NODE_FOCUS = 11; // zoom level to de-cluster
 
     // UI refs
     const statusEl = document.getElementById('status');
@@ -116,7 +114,7 @@
 
     const setStatus = (msg, isError=false)=>{ statusEl.innerHTML = isError ? `<span class="error">${msg}</span>` : msg; };
 
-    // --- CSV loader ---
+    // Loader
     async function loadCSV(url){
       const r = await fetch(url, {cache:"no-store"});
       if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
@@ -127,15 +125,15 @@
     const toNum = v => { if(v==null) return NaN; const n=Number(String(v).trim().replace(',','.')); return Number.isFinite(n)? n: NaN; };
     const findKey = (headers, aliases)=>{ const H=headers.map(normKey); for(const a of aliases){ const i=H.indexOf(a); if(i!=-1) return headers[i]; } return null; };
 
-    // Load
+    // Load data
     let rawNodes, rawEdges;
     try { [rawNodes, rawEdges] = await Promise.all([loadCSV(NODES_CSV_URL), loadCSV(EDGES_CSV_URL)]); }
     catch(e){ setStatus(`Couldn’t load Google Sheets. Check sharing/tab names.<br>${e.message}`, true); return; }
 
     // Nodes
     const nodeHeaders = Object.keys(rawNodes[0] || {});
-    const latKey = findKey(nodeHeaders, ["lat","latitude","y","coord_lat","latitud"]);
-    const lonKey = findKey(nodeHeaders, ["lon","lng","long","longitude","x","coord_lon","longitud"]);
+    const latKey = findKey(nodeHeaders, ["lat","latitude","y","coord_lat"]);
+    const lonKey = findKey(nodeHeaders, ["lon","lng","long","longitude","x","coord_lon"]);
     const pubKey = findKey(nodeHeaders, ["public","visible","publish","is_public"]);
     const degKey = findKey(nodeHeaders, ["degree","deg","tier"]);
     const gmapsKey = findKey(nodeHeaders, ["gmaps","gmaps_link","googlemaps"]);
@@ -144,14 +142,11 @@
       const s=String(v??"").trim().toLowerCase();
       if (s==="1" || s==="first" || s==="direct") return "1";
       if (s==="2" || s==="second" || s==="indirect") return "2";
-      return "1"; // default to first if unset
+      return "1";
     }
-
-    // manual-only gmaps (no auto from lat/lon)
     function readManualGMaps(row){
       if (!gmapsKey) return "";
-      const val = String(row[gmapsKey] ?? "").trim();
-      return val; // may be "" → hidden
+      return String(row[gmapsKey] ?? "").trim();
     }
 
     const nodes = rawNodes.map(row => {
@@ -170,19 +165,18 @@
         lat, lon,
         tags: String(row.tags ?? "").split(/[;,]/).map(t=>t.trim()).filter(Boolean),
         url: row.url ?? "",
-        gmaps: readManualGMaps(row), // manual-only link
+        gmaps: readManualGMaps(row),
         public: vis,
         degree
       };
     }).filter(n => n.id && Number.isFinite(n.lat) && Number.isFinite(n.lon) && n.public);
-    if (!nodes.length){ setStatus(`No valid nodes. Check lat/lon + 'public' values.`, true); return; }
+    if (!nodes.length){ setStatus(`No valid nodes.`, true); return; }
     const nodeById = new Map(nodes.map(n => [n.id, n]));
 
-    // Adjacency (for indirect B→C text)
+    // Edges + adjacency
     const outAdj = new Map(), inAdj = new Map();
     const addToSet = (map, key, val)=>{ if(!map.has(key)) map.set(key, new Set()); map.get(key).add(val); };
 
-    // Edges
     const edgesRaw = rawEdges.map(e => {
       const s = String(e.source_id ?? e.source ?? "").trim();
       const t = String(e.target_id ?? e.target ?? "").trim();
@@ -193,7 +187,6 @@
       return { source:s, target:t, relationship: rel || "linked", since, public:isPublic };
     }).filter(e => e.public && nodeById.has(e.source) && nodeById.has(e.target) && e.source !== e.target);
 
-    // de-dupe
     const seen = new Set(), uniqEdges=[];
     for (const e of edgesRaw){
       const [a,b] = e.source < e.target ? [e.source,e.target] : [e.target,e.source];
@@ -225,7 +218,6 @@
       linked:    { color:"#9aa3b2", width:2.0, label:"Linked" }
     };
     const relTypes = Array.from(new Set(uniqEdges.map(e => (e.relationship||"linked").toLowerCase()))).sort();
-
     const selectedRels = new Set(); // empty => show all
     function addRelCheck(relKey){
       const st = REL_STYLE[relKey] || { color:"#9aa3b2", label: relKey };
@@ -241,7 +233,6 @@
       });
     }
     relTypes.forEach(addRelCheck);
-
     for (const r of relTypes){
       const st = REL_STYLE[r] || REL_STYLE.linked;
       const span = document.createElement("span");
@@ -249,15 +240,18 @@
       edgeLegend.append(span);
     }
 
-    // Map
+    // Map (disable default attribution → add one compact control)
     mapboxgl.accessToken = MAPBOX_TOKEN;
     const map = new mapboxgl.Map({
-      container:'map', style:'mapbox://styles/mapbox/light-v11',
-      center:[24,56], zoom:3, projection:'equalEarth'
+      container:'map',
+      style:'mapbox://styles/mapbox/light-v11',
+      center:[24,56], zoom:3, projection:'equalEarth',
+      attributionControl: false
     });
-    map.addControl(new mapboxgl.NavigationControl());
+    map.addControl(new mapboxgl.NavigationControl(), 'top-left');
+    map.addControl(new mapboxgl.AttributionControl({ compact: true }), 'bottom-right');
 
-    // Icon drawing + registration
+    // Icon drawing
     function makeIconCanvas(shape, fill, size=48, stroke="#111"){
       const c=document.createElement("canvas"); c.width=c.height=size;
       const ctx=c.getContext("2d");
@@ -353,7 +347,6 @@
       const since = f.properties.since;
       const label = REL_STYLE[rel]?.label || rel;
 
-      // Indirects: A→B and B→C
       const second = [];
       const bn = b?.id;
       const outs = bn ? Array.from(outAdj.get(bn) || []) : [];
@@ -363,11 +356,10 @@
         if (c) second.push(`• ${b?.name} → ${c.name}`);
       }
       const extra = second.length ? `\n\nAlso connected:\n${second.join("\n")}` : "";
-
       return `<b>${a?.name || f.properties.source}</b> — ${label} — <b>${b?.name || f.properties.target}</b>${since?` (since ${since})`:""}${extra}`;
     }
 
-    // Cluster sidebar helpers
+    // Cluster sidebar
     function showClusterList(title, list){
       clusterPanel.style.display = "block";
       const items = list.map(n => `
@@ -385,13 +377,7 @@
           const id = el.getAttribute("data-id");
           const n = nodeById.get(id);
           if (!n) return;
-
-          // First zoom beyond cluster threshold so the pin exists,
-          // then select/highlight it.
-          const once = () => {
-            map.off('moveend', once);
-            selectNode(id, true);
-          };
+          const once = () => { map.off('moveend', once); selectNode(id, true); };
           map.on('moveend', once);
           map.easeTo({ center:[n.lon, n.lat], zoom: Z_NODE_FOCUS, duration: 600 });
         });
@@ -400,7 +386,6 @@
     function hideClusterList(){ clusterPanel.style.display="none"; clusterList.innerHTML=""; }
 
     map.on('load', () => {
-      // keep it 2D
       map.setPitch(0); map.setBearing(0); map.dragRotate.disable(); map.touchZoomRotate.disableRotation();
 
       // Register icons + legend
@@ -419,70 +404,32 @@
         chip.append(lbl); legend.append(chip);
       }
 
-      // Initial filtered set
+      // Initial nodes & edges
       const visibleNodes = nodes.filter(passesNodeFilters);
       const allowedIds = new Set(visibleNodes.map(n=>n.id));
 
-      // EDGES
       map.addSource("edges", { type:"geojson", data:{ type:"FeatureCollection", features: edgeFeatures(allowedIds) }});
-      map.addLayer({
-        id:"edges",
-        type:"line",
-        source:"edges",
+      map.addLayer({ id:"edges", type:"line", source:"edges",
         paint:{ "line-color":["get","color"], "line-width":["get","width"], "line-opacity":["get","opacity"] },
-        layout:{ "line-cap":"round", "line-join":"round" }
-      });
-      // fat invisible hit layer for easy clicking
-      map.addLayer({
-        id:"edges-hit",
-        type:"line",
-        source:"edges",
+        layout:{ "line-cap":"round", "line-join":"round" } });
+      map.addLayer({ id:"edges-hit", type:"line", source:"edges",
         paint:{ "line-color":"#000", "line-width":[ "+", ["get","width"], 8 ], "line-opacity":0 },
-        layout:{ "line-cap":"round", "line-join":"round" }
-      });
+        layout:{ "line-cap":"round", "line-join":"round" } });
 
-      // NODES with clustering
       const initialNodeFeatures = nodeFeatures(visibleNodes, iconNameForType);
       map.addSource("nodes", {
         type:"geojson",
         data:{ type:"FeatureCollection", features: initialNodeFeatures },
         cluster:true, clusterRadius:50, clusterMaxZoom:10
       });
-
-      // Clusters
-      map.addLayer({
-        id: "clusters",
-        type: "circle",
-        source: "nodes",
-        filter: ["has","point_count"],
-        paint: {
-          "circle-color": "#273043",
-          "circle-stroke-color": "#3a4863",
-          "circle-stroke-width": 1.5,
-          "circle-radius": ["step", ["get","point_count"], 14, 10, 18, 25, 24, 50, 30]
-        }
-      });
-      map.addLayer({
-        id: "cluster-count",
-        type: "symbol",
-        source: "nodes",
-        filter: ["has","point_count"],
-        layout: {
-          "text-field": ["get","point_count_abbreviated"],
-          "text-font": ["Open Sans Semibold","Arial Unicode MS Bold"],
-          "text-size": 12
-        },
-        paint: { "text-color": "#e8ebf2" }
-      });
-
-      // Unclustered markers (use custom icons)
-      map.addLayer({
-        id:"nodes",
-        type:"symbol",
-        source:"nodes",
-        filter: ["!", ["has","point_count"]],
-        layout:{ "icon-image":["get","icon"], "icon-size":0.7, "icon-allow-overlap":true }
-      });
+      map.addLayer({ id:"clusters", type:"circle", source:"nodes", filter:["has","point_count"],
+        paint:{ "circle-color":"#273043","circle-stroke-color":"#3a4863","circle-stroke-width":1.5,
+                "circle-radius":["step",["get","point_count"],14,10,18,25,24,50,30] }});
+      map.addLayer({ id:"cluster-count", type:"symbol", source:"nodes", filter:["has","point_count"],
+        layout:{ "text-field":["get","point_count_abbreviated"], "text-size":12 },
+        paint:{ "text-color":"#e8ebf2" }});
+      map.addLayer({ id:"nodes", type:"symbol", source:"nodes", filter:["!",["has","point_count"]],
+        layout:{ "icon-image":["get","icon"], "icon-size":0.7, "icon-allow-overlap":true }});
 
       function fitTo(features){
         if(!features.length) return;
@@ -491,20 +438,16 @@
       }
       fitTo(initialNodeFeatures);
 
-      // Refresh with filters / toggles
+      // Refresh
       function refresh(){
         selectedNodeId=null; selectedEdgeKey=null; hideClusterList();
         const list = nodes.filter(passesNodeFilters);
         const feats = nodeFeatures(list, iconNameForType);
         const ids = new Set(list.map(n=>n.id));
-
-        // nodes (cluster source)
         map.getSource("nodes").setData({ type:"FeatureCollection", features: feats });
 
-        // edges
         if (toggleLines.checked) {
-          const edgeFeats = edgeFeatures(ids);
-          map.getSource("edges").setData({ type:"FeatureCollection", features: edgeFeats });
+          map.getSource("edges").setData({ type:"FeatureCollection", features: edgeFeatures(ids) });
           map.setLayoutProperty("edges","visibility","visible");
           map.setLayoutProperty("edges-hit","visibility","visible");
         } else {
@@ -529,46 +472,38 @@
       });
       clearSel.addEventListener("click", ()=>{ search.value=""; details.textContent="(Click a pin or a line to see details)"; refresh(); });
 
-      // Node select (also used after cluster-list zoom)
+      // Node select + details
       function selectNode(id, keepClusterOpen=false){
         selectedNodeId = id; selectedEdgeKey=null;
         const n = nodeById.get(id); if(!n) return;
         details.innerHTML = nodeDetailsHTML(n);
-        map.flyTo({center:[n.lon,n.lat], zoom: Z_NODE_FOCUS}); // ensure unclustered
+        map.flyTo({center:[n.lon,n.lat], zoom: Z_NODE_FOCUS});
 
         const list = nodes.filter(passesNodeFilters);
         const ids = new Set(list.map(x=>x.id));
-        const edgeFeats = edgeFeatures(ids);
-        map.getSource("edges").setData({ type:"FeatureCollection", features: edgeFeats });
+        map.getSource("edges").setData({ type:"FeatureCollection", features: edgeFeatures(ids) });
 
         if (!keepClusterOpen) hideClusterList();
       }
-
       map.on("click","nodes",(e)=>{
         const f=e.features?.[0]; if(!f) return;
         selectNode(f.properties.id);
       });
 
-      // Cluster click → show list and zoom; list item click zooms + selects node
+      // Cluster click → ONLY open list (no zoom here)
       map.on("click","clusters", (e) => {
         const features = map.queryRenderedFeatures(e.point, { layers: ["clusters"] });
         const clusterId = features[0]?.properties?.cluster_id;
         if (clusterId == null) return;
-
         map.getSource("nodes").getClusterLeaves(clusterId, 200, 0, (err, leaves) => {
           if (err || !leaves) return;
           const items = leaves.map(l => nodeById.get(l.properties.id)).filter(Boolean);
           showClusterList(`This area has ${items.length} items`, items);
         });
-
-        map.getSource("nodes").getClusterExpansionZoom(clusterId, (err, zoom) => {
-          if (err) return;
-          // expand a bit, but final zoom happens when list item clicked
-          map.easeTo({ center: e.lngLat, zoom: Math.max(zoom, 9) });
-        });
+        // Intentionally no zoom here
       });
 
-      // Clickable edges (with indirect B→C text)
+      // Clickable edges
       map.on("click","edges-hit",(e)=>{
         const f=e.features?.[0]; if(!f) return;
         selectedNodeId=null;
@@ -577,8 +512,7 @@
 
         const list = nodes.filter(passesNodeFilters);
         const ids = new Set(list.map(x=>x.id));
-        const edgeFeats = edgeFeatures(ids);
-        map.getSource("edges").setData({ type:"FeatureCollection", features: edgeFeats });
+        map.getSource("edges").setData({ type:"FeatureCollection", features: edgeFeatures(ids) });
         hideClusterList();
       });
 
