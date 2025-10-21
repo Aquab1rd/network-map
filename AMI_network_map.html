@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Alongside Ministries — 2D Map (Shapes + Colors + Edges)</title>
+  <title>Alongside Ministries — 2D Map (Shapes + Edges + Filters)</title>
 
   <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet" />
   <style>
     :root { --bg:#0f1115; --panel:#151922; --ink:#e8ebf2; --muted:#9aa3b2; --accent:#3aa0ff; }
-    html, body { height:100%; margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;}
+    html, body { height:100%; margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
     .wrap { max-width:1200px; margin:0 auto; padding:20px; }
     h1 { font-size:20px; margin:4px 0 8px; font-weight:700; }
     .hint { color:var(--muted); font-size:12px; margin:0 0 12px; }
@@ -17,11 +17,14 @@
     #map { height:520px; border-radius:10px; overflow:hidden; }
     .controls { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px;}
     .controls label { display:flex; flex-direction:column; gap:6px; font-size:12px; color:var(--muted); }
+    .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
     select, input[type="text"], button { background:#0c0f16; color:var(--ink); border:1px solid #273043; border-radius:8px; padding:8px 10px; min-width:160px;}
     button { cursor:pointer; }
     .legend { display:flex; flex-wrap:wrap; gap:10px 16px; margin:8px 0 4px; }
     .chip { display:inline-flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); }
     .chip img { width:18px; height:18px; display:inline-block; border-radius:4px; background:#0c0f16; border:1px solid #273043; }
+    .edge-legend { display:flex; flex-wrap:wrap; gap:14px; margin-top:8px; font-size:12px; color:var(--muted); }
+    .edge-legend .line { width:30px; height:0; border-top-width:4px; border-top-style:solid; border-radius:2px; display:inline-block; }
     .details { white-space:pre-wrap; }
     a { color:var(--accent); text-decoration:none; }
     a:hover { text-decoration:underline; }
@@ -35,25 +38,34 @@
     <div id="status" class="hint">Loading data…</div>
 
     <div class="controls card">
-      <label>Type
-        <select id="typeFilter"><option>All</option></select>
-      </label>
-      <label>Tag
-        <select id="tagFilter"><option>Any</option></select>
-      </label>
-      <label>Search
-        <input id="searchBox" type="text" placeholder="Type a name…"/>
-      </label>
-      <button id="clearSel" style="margin-top:auto;">Clear selection</button>
+      <div class="row">
+        <label>Type
+          <select id="typeFilter"><option>All</option></select>
+        </label>
+        <label>Tag
+          <select id="tagFilter"><option>Any</option></select>
+        </label>
+        <label>Relationship
+          <select id="relFilter"><option>All</option></select>
+        </label>
+        <label>Search
+          <input id="searchBox" type="text" placeholder="Type a name…"/>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;margin-top:auto;">
+          <input id="toggleLines" type="checkbox" checked/> Show lines
+        </label>
+        <button id="clearSel" style="margin-top:auto;">Clear selection</button>
+      </div>
     </div>
 
     <div class="legend card" id="legend"></div>
+    <div class="edge-legend" id="edgeLegend"></div>
 
     <div class="grid">
       <div class="card" style="grid-column: 1 / -1;">
         <div id="map"></div>
       </div>
-      <div class="card details" id="details">(Click a pin to see details)</div>
+      <div class="card details" id="details">(Click a pin or a line to see details)</div>
     </div>
   </div>
 
@@ -61,7 +73,6 @@
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   <script>
   (async function(){
-    // === LIVE SHEETS + TOKEN ===
     const NODES_CSV_URL = "https://docs.google.com/spreadsheets/d/1MSwF46BkDjRhOdHd4Pw0ArCVgvdcgDACWvyswFq8XI4/gviz/tq?tqx=out:csv&sheet=Nodes";
     const EDGES_CSV_URL = "https://docs.google.com/spreadsheets/d/1eQrmiVA4wxf6J79SZkyhZb-vEAyX3yxfapen113MSrA/gviz/tq?tqx=out:csv&sheet=Edges";
     const MAPBOX_TOKEN  = "pk.eyJ1IjoiYXF1YWIxcmQiLCJhIjoiY21ndjl5Y2RzMGN2azJsc2J4d3d2N2tyeSJ9.JApvZZEs_kiwNl4Y9-aRaQ";
@@ -69,62 +80,40 @@
     const statusEl = document.getElementById('status');
     const typeSel  = document.getElementById('typeFilter');
     const tagSel   = document.getElementById('tagFilter');
+    const relSel   = document.getElementById('relFilter');
+    const toggleLines = document.getElementById('toggleLines');
     const search   = document.getElementById('searchBox');
     const clearSel = document.getElementById('clearSel');
     const legend   = document.getElementById('legend');
+    const edgeLegend = document.getElementById('edgeLegend');
     const details  = document.getElementById('details');
 
-    function setStatus(msg, isError=false){
-      statusEl.innerHTML = isError ? `<span class="error">${msg}</span>` : msg;
-      console.log(msg);
-    }
+    const setStatus = (msg, isError=false)=>{ statusEl.innerHTML = isError ? `<span class="error">${msg}</span>` : msg; };
 
-    // --- CSV loader ---
     async function loadCSV(url){
-      const r = await fetch(url, {cache:"no-store"});
-      if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
+      const r = await fetch(url, {cache:"no-store"}); if(!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
       const text = await r.text();
       return Papa.parse(text, {header:true, skipEmptyLines:true}).data || [];
     }
     const normKey = k => String(k||'').replace(/^\ufeff/,'').trim().toLowerCase();
-    const toNum = v => {
-      if (v == null) return NaN;
-      const s = String(v).trim().replace(',', '.');
-      const n = Number(s);
-      return Number.isFinite(n) ? n : NaN;
-    };
-    function findKey(headers, aliases){
-      const H = headers.map(normKey);
-      for (const a of aliases){
-        const i = H.indexOf(a);
-        if (i !== -1) return headers[i];
-      }
-      return null;
-    }
+    const toNum = v => { if(v==null) return NaN; const n = Number(String(v).trim().replace(',','.')); return Number.isFinite(n)? n: NaN; };
+    const findKey = (headers, aliases)=>{ const H=headers.map(normKey); for(const a of aliases){ const i=H.indexOf(a); if(i!=-1) return headers[i]; } return null; };
 
-    // --- Load data ---
+    // Load
     let rawNodes, rawEdges;
-    try {
-      [rawNodes, rawEdges] = await Promise.all([loadCSV(NODES_CSV_URL), loadCSV(EDGES_CSV_URL)]);
-    } catch (e){
-      setStatus(`Couldn’t load Google Sheets. Check sharing and tab names.<br>${e.message}`, true);
-      return;
-    }
+    try { [rawNodes, rawEdges] = await Promise.all([loadCSV(NODES_CSV_URL), loadCSV(EDGES_CSV_URL)]); }
+    catch(e){ setStatus(`Couldn’t load Google Sheets. Check sharing/tab names.<br>${e.message}`, true); return; }
 
-    // --- Normalize nodes ---
+    // Nodes
     const nodeHeaders = Object.keys(rawNodes[0] || {});
     const latKey = findKey(nodeHeaders, ["lat","latitude","y","coord_lat","latitud"]);
     const lonKey = findKey(nodeHeaders, ["lon","lng","long","longitude","x","coord_lon","longitud"]);
     const pubKey = findKey(nodeHeaders, ["public","visible","publish","is_public"]);
-
     const nodes = rawNodes.map(row => {
       const lat = latKey ? toNum(row[latKey]) : NaN;
       const lon = lonKey ? toNum(row[lonKey]) : NaN;
       let vis = true;
-      if (pubKey){
-        const raw = String(row[pubKey] ?? "").trim().toUpperCase();
-        vis = (raw === "" || raw === "TRUE" || raw === "YES" || raw === "1");
-      }
+      if (pubKey){ const raw = String(row[pubKey] ?? "").trim().toUpperCase(); vis = (raw===""||raw==="TRUE"||raw==="YES"||raw==="1"); }
       return {
         id: String(row.id ?? row.ID ?? row.Id ?? "").trim() || String(row.name ?? "").trim(),
         name: String(row.name ?? row.Name ?? "").trim(),
@@ -137,35 +126,28 @@
         public: vis
       };
     }).filter(n => n.id && Number.isFinite(n.lat) && Number.isFinite(n.lon) && n.public);
-
-    if (!nodes.length){
-      setStatus(`No valid nodes found. Check lat/lon columns and 'public' values.`, true);
-      return;
-    }
-
+    if (!nodes.length){ setStatus(`No valid nodes. Check lat/lon + 'public' values.`, true); return; }
     const nodeById = new Map(nodes.map(n => [n.id, n]));
 
-    // --- Normalize edges ---
-    // Accept header variants and drop edges without both endpoints
-    const edges = rawEdges.map(e => {
+    // Edges
+    const edgesRaw = rawEdges.map(e => {
       const s = String(e.source_id ?? e.source ?? "").trim();
       const t = String(e.target_id ?? e.target ?? "").trim();
-      const rel = String(e.relationship ?? e.relation ?? "").trim();
+      const rel = String(e.relationship ?? e.relation ?? "linked").trim();
       const since = String(e.since ?? e.year ?? "").trim();
       const pubRaw = String(e.public ?? "").trim().toUpperCase();
-      const isPublic = (pubRaw === "" || pubRaw === "TRUE" || pubRaw === "YES" || pubRaw === "1");
-      return { source:s, target:t, relationship:rel || "linked", since, public:isPublic };
+      const isPublic = (pubRaw===""||pubRaw==="TRUE"||pubRaw==="YES"||pubRaw==="1");
+      return { source:s, target:t, relationship: rel || "linked", since, public:isPublic };
     }).filter(e => e.public && nodeById.has(e.source) && nodeById.has(e.target) && e.source !== e.target);
 
-    // Optional: de-dupe undirected edges (A–B same as B–A)
-    const seen = new Set(), uniqEdges = [];
-    for (const e of edges){
-      const [a,b] = e.source < e.target ? [e.source, e.target] : [e.target, e.source];
+    const seen = new Set(), uniqEdges=[];
+    for (const e of edgesRaw){
+      const [a,b] = e.source < e.target ? [e.source,e.target] : [e.target,e.source];
       const key = a+"|"+b+"|"+(e.relationship||"");
-      if (!seen.has(key)){ seen.add(key); uniqEdges.push(e); }
+      if(!seen.has(key)){ seen.add(key); uniqEdges.push(e); }
     }
 
-    // === Type → color + shape (for markers)
+    // Types/colors/shapes
     const types = Array.from(new Set(nodes.map(n => n.type))).sort();
     const allTags = Array.from(new Set(nodes.flatMap(n => n.tags))).sort();
     for (const t of types) typeSel.append(new Option(t, t));
@@ -174,278 +156,239 @@
     const palette = ["#4e79a7","#f28e2b","#e15759","#76b7b2","#59a14f","#edc948","#b07aa1","#ff9da7","#9c755f","#bab0ab",
                      "#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf"];
     const typeColors = new Map(types.map((t,i)=>[t, palette[i % palette.length]]));
-    const SHAPE_BY_TYPE = new Map([
-      ["Alongsider", "circle"],
-      ["Church", "square"],
-      ["Partner", "diamond"],
-      ["Supporter", "triangle"]
-    ]);
-    const fallbackShape = "circle";
+    const SHAPE_BY_TYPE = new Map([["Alongsider","circle"],["Church","square"],["Partner","diamond"],["Supporter","triangle"]]);
+    const fallbackShape="circle";
     const colorFor = n => typeColors.get(n.type) || "#999";
     const shapeFor = n => SHAPE_BY_TYPE.get(n.type) || fallbackShape;
 
-    // === Relationship styles (edge color/width)
+    // Relationship styles + legend
     const REL_STYLE = {
-      leads:     { color:"#e15759", width: 2.5 },
-      supports:  { color:"#59a14f", width: 2.5 },
-      partners:  { color:"#4e79a7", width: 2.5 },
-      linked:    { color:"#9aa3b2", width: 2.0 }
+      leads:     { color:"#e15759", width:2.5, label:"Leads" },
+      supports:  { color:"#59a14f", width:2.5, label:"Supports" },
+      partners:  { color:"#4e79a7", width:2.5, label:"Partners" },
+      linked:    { color:"#9aa3b2", width:2.0, label:"Linked" }
     };
-    function styleForRel(rel){
-      const key = String(rel||"").toLowerCase();
-      return REL_STYLE[key] || REL_STYLE.linked;
+    const relTypes = Array.from(new Set(uniqEdges.map(e => (e.relationship||"linked").toLowerCase()))).sort();
+    for (const r of relTypes){ relSel.append(new Option(REL_STYLE[r]?.label || r, r)); }
+    // Edge legend UI
+    for (const r of relTypes){
+      const st = REL_STYLE[r] || REL_STYLE.linked;
+      const span = document.createElement("span");
+      span.innerHTML = `<span class="line" style="border-top-color:${st.color}"></span> ${st.label || r}`;
+      edgeLegend.append(span);
     }
 
-    // === 2D FLAT MAP ===
+    // Map
     mapboxgl.accessToken = MAPBOX_TOKEN;
     const map = new mapboxgl.Map({
-      container: 'map',
-      style: 'mapbox://styles/mapbox/light-v11',
-      center: [24,56],
-      zoom: 3,
-      projection: 'equalEarth'
+      container:'map', style:'mapbox://styles/mapbox/light-v11',
+      center:[24,56], zoom:3, projection:'equalEarth'
     });
     map.addControl(new mapboxgl.NavigationControl());
 
-    // --- icon factory + safe addImage (ImageData) ---
+    // Icon drawing
     function makeIconCanvas(shape, fill, size=48, stroke="#111"){
-      const c = document.createElement("canvas");
-      c.width = c.height = size;
-      const ctx = c.getContext("2d");
+      const c=document.createElement("canvas"); c.width=c.height=size;
+      const ctx=c.getContext("2d");
       ctx.clearRect(0,0,size,size);
-      ctx.lineWidth = Math.max(2, size*0.05);
-      ctx.strokeStyle = stroke;
-      ctx.fillStyle = fill;
-
-      const r = size*0.33;
-      const cx = size/2, cy = size/2;
-
+      ctx.lineWidth=Math.max(2,size*0.05);
+      ctx.strokeStyle=stroke; ctx.fillStyle=fill;
+      const r=size*0.33, cx=size/2, cy=size/2;
       ctx.beginPath();
-      if (shape === "circle"){
-        ctx.arc(cx, cy, r, 0, Math.PI*2);
-      } else if (shape === "square"){
-        const s = r*1.6;
-        ctx.rect(cx - s/2, cy - s/2, s, s);
-      } else if (shape === "diamond"){
-        const s = r*1.8;
-        ctx.moveTo(cx, cy - s/2);
-        ctx.lineTo(cx + s/2, cy);
-        ctx.lineTo(cx, cy + s/2);
-        ctx.lineTo(cx - s/2, cy);
-        ctx.closePath();
-      } else if (shape === "triangle"){
-        const s = r*2.0;
-        const h = s*Math.sqrt(3)/2;
-        ctx.moveTo(cx, cy - h/2);
-        ctx.lineTo(cx - s/2, cy + h/2);
-        ctx.lineTo(cx + s/2, cy + h/2);
-        ctx.closePath();
-      } else {
-        ctx.arc(cx, cy, r, 0, Math.PI*2);
-      }
-      ctx.fill();
-      ctx.stroke();
-
-      // center dot
-      ctx.beginPath();
-      ctx.fillStyle = "rgba(255,255,255,0.95)";
-      ctx.arc(cx, cy, size*0.035, 0, Math.PI*2);
-      ctx.fill();
-
+      if(shape==="circle"){ ctx.arc(cx,cy,r,0,Math.PI*2); }
+      else if(shape==="square"){ const s=r*1.6; ctx.rect(cx-s/2,cy-s/2,s,s); }
+      else if(shape==="diamond"){ const s=r*1.8; ctx.moveTo(cx,cy-s/2); ctx.lineTo(cx+s/2,cy); ctx.lineTo(cx,cy+s/2); ctx.lineTo(cx-s/2,cy); ctx.closePath(); }
+      else if(shape==="triangle"){ const s=r*2.0, h=s*Math.sqrt(3)/2; ctx.moveTo(cx,cy-h/2); ctx.lineTo(cx-s/2,cy+h/2); ctx.lineTo(cx+s/2,cy+h/2); ctx.closePath(); }
+      else { ctx.arc(cx,cy,r,0,Math.PI*2); }
+      ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.fillStyle="rgba(255,255,255,0.95)"; ctx.arc(cx,cy,size*0.035,0,Math.PI*2); ctx.fill();
       return c;
     }
-
     function addCanvasAsImage(map, id, canvas){
-      const ctx = canvas.getContext('2d');
-      const {width, height} = canvas;
-      const imgData = ctx.getImageData(0,0,width,height);
-      if (map.hasImage(id)) map.removeImage(id);
-      map.addImage(id, imgData, { pixelRatio: 1 });
+      const ctx=canvas.getContext('2d'); const {width,height}=canvas; const img=ctx.getImageData(0,0,width,height);
+      if(map.hasImage(id)) map.removeImage(id);
+      map.addImage(id, img, { pixelRatio:1 });
+    }
+    function legendSwatch(shape,color){
+      const c=makeIconCanvas(shape,color,22); const img=document.createElement("img"); img.src=c.toDataURL("image/png"); return img;
     }
 
-    function legendSwatch(shape, color){
-      const c = makeIconCanvas(shape, color, 22);
-      const img = document.createElement("img");
-      img.src = c.toDataURL("image/png");
-      return img;
+    // Helpers
+    const passesNodeFilters = n => (typeSel.value==="All"||n.type===typeSel.value) && (tagSel.value==="Any"||n.tags.includes(tagSel.value));
+    function passesEdgeRelFilter(e){
+      const want = relSel.value; if(want==="All") return true;
+      return (String(e.relationship||"linked").toLowerCase()===want);
     }
 
-    // Filtering helpers
-    function passesFilters(n){
-      const typeOk = (typeSel.value === "All" || n.type === typeSel.value);
-      const tagOk  = (tagSel.value === "Any" || n.tags.includes(tagSel.value));
-      return typeOk && tagOk;
-    }
-
-    // Build GeoJSON for nodes
     function nodeFeatures(list, iconNameForType){
       return list.map(n => ({
-        type: "Feature",
-        geometry: { type: "Point", coordinates: [n.lon, n.lat] },
-        properties: {
-          id: n.id,
-          name: n.name,
-          type: n.type,
-          icon: iconNameForType.get(n.type) || "fallback"
-        }
+        type:"Feature",
+        geometry:{ type:"Point", coordinates:[n.lon,n.lat] },
+        properties:{ id:n.id, name:n.name, type:n.type, icon: iconNameForType.get(n.type) || "fallback" }
       }));
     }
 
-    // Build GeoJSON for edges (only those with both endpoints in 'allowedIds')
-    function edgeFeatures(allowedIds, selectedId=null){
-      const feats = [];
-      for (const e of uniqEdges){
-        if (!allowedIds.has(e.source) || !allowedIds.has(e.target)) continue;
-        const a = nodeById.get(e.source);
-        const b = nodeById.get(e.target);
-        if (!a || !b) continue;
-        const { color, width } = styleForRel(e.relationship);
-        const isHi = selectedId && (e.source === selectedId || e.target === selectedId);
+    // selected state
+    let selectedNodeId = null;
+    let selectedEdgeKey = null; // "a|b|rel" with a<b
+
+    function edgeKey(e){
+      const a = e.source < e.target ? e.source : e.target;
+      const b = e.source < e.target ? e.target : e.source;
+      return `${a}|${b}|${(e.relationship||"linked").toLowerCase()}`;
+    }
+
+    function edgeFeatures(allowedIds){
+      const feats=[];
+      for(const e of uniqEdges){
+        if(!allowedIds.has(e.source)||!allowedIds.has(e.target)) continue;
+        if(!passesEdgeRelFilter(e)) continue;
+        const a=nodeById.get(e.source), b=nodeById.get(e.target);
+        const rel=(e.relationship||"linked").toLowerCase();
+        const st=REL_STYLE[rel] || REL_STYLE.linked;
+        const isNodeHi = selectedNodeId && (e.source===selectedNodeId || e.target===selectedNodeId);
+        const isEdgeHi = selectedEdgeKey && selectedEdgeKey===edgeKey(e);
+        const hi = isNodeHi || isEdgeHi;
         feats.push({
-          type: "Feature",
-          geometry: { type: "LineString", coordinates: [[a.lon, a.lat], [b.lon, b.lat]] },
-          properties: {
-            source: e.source,
-            target: e.target,
-            relationship: e.relationship || "linked",
-            since: e.since || "",
-            color: color,
-            width: isHi ? width + 1.5 : width,
-            opacity: isHi ? 0.9 : 0.45
+          type:"Feature",
+          geometry:{ type:"LineString", coordinates:[[a.lon,a.lat],[b.lon,b.lat]] },
+          properties:{
+            source:e.source, target:e.target, relationship:rel, since:e.since||"",
+            color: st.color, width: hi ? st.width+1.5 : st.width, opacity: hi ? 0.9 : 0.45,
+            key: edgeKey(e),
+            label: `${nodeById.get(e.source)?.name || e.source} ${rel} ${nodeById.get(e.target)?.name || e.target}${e.since?` (since ${e.since})`:""}`
           }
         });
       }
       return feats;
     }
 
-    let selectedId = null;
-
     map.on('load', () => {
-      // keep 2D feel
-      map.setPitch(0);
-      map.setBearing(0);
-      map.dragRotate.disable();
-      map.touchZoomRotate.disableRotation();
+      map.setPitch(0); map.setBearing(0); map.dragRotate.disable(); map.touchZoomRotate.disableRotation();
 
-      // Register type icons + legend
-      if (!map.hasImage("fallback")) {
-        addCanvasAsImage(map, "fallback", makeIconCanvas("circle", "#999", 48));
-      }
+      if(!map.hasImage("fallback")) addCanvasAsImage(map,"fallback",makeIconCanvas("circle","#999",48));
+
+      // type icons + legend
       const iconNameForType = new Map();
       for (const t of types){
         const shape = SHAPE_BY_TYPE.get(t) || fallbackShape;
         const color = typeColors.get(t) || "#999";
-        const iconName = `marker-${t.replace(/\s+/g,'_')}`;
-        addCanvasAsImage(map, iconName, makeIconCanvas(shape, color, 48));
-        iconNameForType.set(t, iconName);
+        const name = `marker-${t.replace(/\s+/g,'_')}`;
+        addCanvasAsImage(map, name, makeIconCanvas(shape, color, 48));
+        iconNameForType.set(t, name);
 
-        const chip = document.createElement("div"); chip.className="chip";
-        chip.append(legendSwatch(shape, color));
-        const label = document.createElement("span"); label.textContent = t || "(Uncategorized)";
-        chip.append(label);
-        legend.append(chip);
+        const chip=document.createElement("div"); chip.className="chip";
+        chip.append(legendSwatch(shape,color));
+        const lbl=document.createElement("span"); lbl.textContent=t||"(Uncategorized)";
+        chip.append(lbl); legend.append(chip);
       }
 
-      // Initial sets
-      const filteredNodes = nodes.filter(passesFilters);
-      const allowedIds = new Set(filteredNodes.map(n => n.id));
+      // initial data
+      const visibleNodes = nodes.filter(passesNodeFilters);
+      const allowedIds = new Set(visibleNodes.map(n=>n.id));
 
-      // Add EDGES source/layer (below markers)
-      map.addSource("edges", { type:"geojson", data: { type:"FeatureCollection", features: edgeFeatures(allowedIds, selectedId) }});
+      // EDGES source + layers (hit layer on top for easy clicking)
+      map.addSource("edges", { type:"geojson", data:{ type:"FeatureCollection", features: edgeFeatures(allowedIds) }});
       map.addLayer({
-        id: "edges",
-        type: "line",
-        source: "edges",
-        paint: {
-          "line-color": ["get","color"],
-          "line-width": ["get","width"],
-          "line-opacity": ["get","opacity"]
-        },
-        layout: { "line-cap":"round", "line-join":"round" }
+        id:"edges",
+        type:"line",
+        source:"edges",
+        paint:{ "line-color":["get","color"], "line-width":["get","width"], "line-opacity":["get","opacity"] },
+        layout:{ "line-cap":"round", "line-join":"round" }
+      });
+      map.addLayer({
+        id:"edges-hit",
+        type:"line",
+        source:"edges",
+        paint:{ "line-color":"#000", "line-width":[ "+", ["get","width"], 8 ], "line-opacity":0 },
+        layout:{ "line-cap":"round", "line-join":"round" }
       });
 
-      // Add NODES source/layer (above edges)
-      map.addSource("nodes", { type:"geojson", data: { type:"FeatureCollection", features: nodeFeatures(filteredNodes, iconNameForType) }});
+      // NODES source + layer
+      map.addSource("nodes", { type:"geojson", data:{ type:"FeatureCollection", features: nodeFeatures(visibleNodes, iconNameForType) }});
       map.addLayer({
         id:"nodes",
         type:"symbol",
         source:"nodes",
-        layout:{
-          "icon-image": ["get","icon"],
-          "icon-size": 0.7,
-          "icon-allow-overlap": true
-        }
+        layout:{ "icon-image":["get","icon"], "icon-size":0.7, "icon-allow-overlap":true }
       });
 
-      // Fit bounds to visible nodes
       function fitTo(features){
-        if (!features.length) return;
-        const b = new mapboxgl.LngLatBounds();
-        features.forEach(f => b.extend(f.geometry.coordinates));
+        if(!features.length) return;
+        const b=new mapboxgl.LngLatBounds(); features.forEach(f=>b.extend(f.geometry.coordinates));
         map.fitBounds(b, {padding:40, maxZoom:6});
       }
-      fitTo(nodeFeatures(filteredNodes, iconNameForType));
+      fitTo(nodeFeatures(visibleNodes, iconNameForType));
 
-      // Rerender on filters/search
-      function rerender(){
-        const list = nodes.filter(passesFilters);
-        const ids  = new Set(list.map(n => n.id));
-
-        map.getSource("nodes").setData({
-          type:"FeatureCollection",
-          features: nodeFeatures(list, iconNameForType)
-        });
-
-        map.getSource("edges").setData({
-          type:"FeatureCollection",
-          features: edgeFeatures(ids, selectedId)
-        });
-
-        fitTo(nodeFeatures(list, iconNameForType));
+      function refresh(){
+        const list = nodes.filter(passesNodeFilters);
+        const ids = new Set(list.map(n=>n.id));
+        // nodes
+        const nodeFeats = nodeFeatures(list, iconNameForType);
+        map.getSource("nodes").setData({ type:"FeatureCollection", features: nodeFeats });
+        // edges
+        if (toggleLines.checked) {
+          const edgeFeats = edgeFeatures(ids);
+          map.getSource("edges").setData({ type:"FeatureCollection", features: edgeFeats });
+          map.setLayoutProperty("edges","visibility","visible");
+          map.setLayoutProperty("edges-hit","visibility","visible");
+        } else {
+          map.getSource("edges").setData({ type:"FeatureCollection", features: [] });
+          map.setLayoutProperty("edges","visibility","none");
+          map.setLayoutProperty("edges-hit","visibility","none");
+        }
+        fitTo(nodeFeats);
       }
 
-      typeSel.addEventListener("change", ()=>{ selectedId=null; details.textContent="(Click a pin to see details)"; rerender(); });
-      tagSel.addEventListener("change",  ()=>{ selectedId=null; details.textContent="(Click a pin to see details)"; rerender(); });
+      typeSel.addEventListener("change", ()=>{ selectedNodeId=null; selectedEdgeKey=null; details.textContent="(Click a pin or a line to see details)"; refresh(); });
+      tagSel.addEventListener("change", ()=>{ selectedNodeId=null; selectedEdgeKey=null; details.textContent="(Click a pin or a line to see details)"; refresh(); });
+      relSel.addEventListener("change", ()=>{ selectedEdgeKey=null; refresh(); });
+      toggleLines.addEventListener("change", ()=>{ selectedEdgeKey=null; refresh(); });
+
       search.addEventListener("input", () => {
         const q = search.value.toLowerCase().trim();
         const hit = nodes.find(n => n.name.toLowerCase().includes(q));
-        if (hit){
-          selectNode(hit.id);
-        }
+        if (hit) selectNode(hit.id);
       });
-      clearSel.addEventListener("click", ()=>{
-        selectedId=null;
-        details.textContent="(Click a pin to see details)";
-        rerender();
-      });
+      clearSel.addEventListener("click", ()=>{ selectedNodeId=null; selectedEdgeKey=null; details.textContent="(Click a pin or a line to see details)"; search.value=""; refresh(); });
 
-      // Clicking a node: show details, fly, and highlight its edges
       function selectNode(id){
-        selectedId = id;
-        const n = nodeById.get(id);
-        if (!n) return;
-
+        selectedNodeId = id; selectedEdgeKey=null;
+        const n = nodeById.get(id); if(!n) return;
         details.innerHTML = `<b>${n.name}</b> — <i>${n.type}</i>
 ${n.city ? n.city + ", " : ""}${n.country || ""}
 
 Tags: ${n.tags.join(", ") || "—"}
 ${n.url ? `<a href="${n.url}" target="_blank" rel="noopener">Website</a>` : ""}`;
+        map.flyTo({center:[n.lon,n.lat], zoom:6});
 
-        map.flyTo({center:[n.lon, n.lat], zoom:6});
-
-        // Recompute edges with highlight
-        const currentList = nodes.filter(passesFilters);
-        const ids = new Set(currentList.map(x => x.id));
-        map.getSource("edges").setData({
-          type:"FeatureCollection",
-          features: edgeFeatures(ids, selectedId)
-        });
+        const list = nodes.filter(passesNodeFilters);
+        const ids = new Set(list.map(x=>x.id));
+        const edgeFeats = edgeFeatures(ids);
+        map.getSource("edges").setData({ type:"FeatureCollection", features: edgeFeats });
       }
 
       map.on("click","nodes",(e)=>{
-        const f = e.features?.[0];
-        if (!f) return;
+        const f=e.features?.[0]; if(!f) return;
         selectNode(f.properties.id);
+      });
+
+      map.on("click","edges-hit",(e)=>{
+        const f=e.features?.[0]; if(!f) return;
+        selectedNodeId=null;
+        selectedEdgeKey = f.properties.key || null;
+
+        const a = nodeById.get(f.properties.source);
+        const b = nodeById.get(f.properties.target);
+        const rel = f.properties.relationship;
+        const since = f.properties.since;
+        const relLabel = (REL_STYLE[rel]?.label || rel);
+        details.innerHTML = `<b>${a?.name || f.properties.source}</b> — ${relLabel} — <b>${b?.name || f.properties.target}</b>${since?` (since ${since})`:""}`;
+
+        const list = nodes.filter(passesNodeFilters);
+        const ids = new Set(list.map(x=>x.id));
+        const edgeFeats = edgeFeatures(ids);
+        map.getSource("edges").setData({ type:"FeatureCollection", features: edgeFeats });
       });
 
       setStatus(`Loaded <b>${nodes.length}</b> nodes and <b>${uniqEdges.length}</b> edges.`);
