@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Alongside Ministries — Robust 2D Map</title>
+  <title>Alongside Ministries — 2D Map (Shapes + Colors)</title>
 
   <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet" />
   <style>
@@ -20,8 +20,8 @@
     select, input[type="text"], button { background:#0c0f16; color:var(--ink); border:1px solid #273043; border-radius:8px; padding:8px 10px; min-width:160px;}
     button { cursor:pointer; }
     .legend { display:flex; flex-wrap:wrap; gap:10px 16px; margin:8px 0 4px; }
-    .chip { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
-    .dot { width:10px; height:10px; border-radius:50%; display:inline-block; outline:1px solid #111; }
+    .chip { display:inline-flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); }
+    .chip img { width:18px; height:18px; display:inline-block; border-radius:4px; background:#0c0f16; border:1px solid #273043; }
     .details { white-space:pre-wrap; }
     a { color:var(--accent); text-decoration:none; }
     a:hover { text-decoration:underline; }
@@ -140,20 +140,25 @@
       return;
     }
 
-    const nodeById = new Map(nodes.map(n => [n.id, n]));
+    // === Types → colors + shapes ===
     const types = Array.from(new Set(nodes.map(n => n.type))).sort();
     const allTags = Array.from(new Set(nodes.flatMap(n => n.tags))).sort();
     for (const t of types) typeSel.append(new Option(t, t));
     for (const t of allTags) tagSel.append(new Option(t, t));
-    const palette = ["#4e79a7","#f28e2b","#e15759","#76b7b2","#59a14f","#edc948","#b07aa1","#ff9da7","#9c755f","#bab0ab","#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf"];
+
+    // Nice palette, deterministic by type index
+    const palette = ["#4e79a7","#f28e2b","#e15759","#76b7b2","#59a14f","#edc948","#b07aa1","#ff9da7","#9c755f","#bab0ab",
+                     "#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf"];
     const typeColors = new Map(types.map((t,i)=>[t, palette[i % palette.length]]));
+    const SHAPE_BY_TYPE = new Map([
+      ["Alongsider", "circle"],
+      ["Church", "square"],
+      ["Partner", "diamond"],
+      ["Supporter", "triangle"]
+    ]);
+    const fallbackShape = "circle";
     const colorFor = n => typeColors.get(n.type) || "#999";
-    for (const t of types){
-      const chip = document.createElement("div"); chip.className="chip";
-      const dot = document.createElement("span"); dot.className="dot"; dot.style.background = typeColors.get(t);
-      const label = document.createElement("span"); label.textContent = t;
-      chip.append(dot,label); legend.append(chip);
-    }
+    const shapeFor = n => SHAPE_BY_TYPE.get(n.type) || fallbackShape;
 
     // === 2D FLAT MAP ===
     mapboxgl.accessToken = MAPBOX_TOKEN;
@@ -162,9 +167,60 @@
       style: 'mapbox://styles/mapbox/light-v11',
       center: [24,56],
       zoom: 3,
-      projection: 'equalEarth' // flat projection; try 'mercator' or 'naturalEarth' if you prefer
+      projection: 'equalEarth'
     });
     map.addControl(new mapboxgl.NavigationControl());
+
+    // --- icon factory: draw colored shapes on canvas and add to map as images ---
+    function makeIcon(shape, fill, size=28, stroke="#222"){
+      const c = document.createElement("canvas");
+      c.width = c.height = size;
+      const ctx = c.getContext("2d");
+      ctx.clearRect(0,0,size,size);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = stroke;
+      ctx.fillStyle = fill;
+
+      const r = size*0.35;
+      const cx = size/2, cy = size/2;
+
+      ctx.beginPath();
+      if (shape === "circle"){
+        ctx.arc(cx, cy, r, 0, Math.PI*2);
+      } else if (shape === "square"){
+        const s = r*1.5;
+        ctx.rect(cx - s/2, cy - s/2, s, s);
+      } else if (shape === "diamond"){
+        const s = r*1.55;
+        ctx.moveTo(cx, cy - s/2);
+        ctx.lineTo(cx + s/2, cy);
+        ctx.lineTo(cx, cy + s/2);
+        ctx.lineTo(cx - s/2, cy);
+        ctx.closePath();
+      } else if (shape === "triangle"){
+        const s = r*1.8;
+        const h = s*Math.sqrt(3)/2;
+        ctx.moveTo(cx, cy - h/2);
+        ctx.lineTo(cx - s/2, cy + h/2);
+        ctx.lineTo(cx + s/2, cy + h/2);
+        ctx.closePath();
+      } else {
+        // fallback circle
+        ctx.arc(cx, cy, r, 0, Math.PI*2);
+      }
+      ctx.fill();
+      ctx.stroke();
+      return c;
+    }
+
+    // Prebuild a map of type -> iconName, and also make legend swatches
+    const iconNameForType = new Map();
+    function legendSwatch(shape, color){
+      const c = makeIcon(shape, color, 22);
+      const img = document.createElement("img");
+      img.src = c.toDataURL("image/png");
+      return img;
+    }
 
     map.on('load', () => {
       // force 2D feel (no tilt/rotation)
@@ -172,37 +228,54 @@
       map.setBearing(0);
       map.dragRotate.disable();
       map.touchZoomRotate.disableRotation();
-      // Optional: make interactions simpler
-      // map.boxZoom.disable();
-      // map.doubleClickZoom.disable();
-      // map.scrollZoom.disable();
 
-      // Build initial GeoJSON
-      const geo = {
-        type: "FeatureCollection",
-        features: nodes.map(n => ({
-          type: "Feature",
-          geometry: { type: "Point", coordinates: [n.lon, n.lat] },
-          properties: { id: n.id, name: n.name, type: n.type, color: colorFor(n) }
-        }))
-      };
+      // Register one icon per type (shape+color combo)
+      for (const t of types){
+        const shape = SHAPE_BY_TYPE.get(t) || fallbackShape;
+        const color = typeColors.get(t) || "#999";
+        const icon = makeIcon(shape, color, 28);
+        const iconName = `marker-${t.replace(/\s+/g,'_')}`;
+        if (!map.hasImage(iconName)) {
+          map.addImage(iconName, icon, { pixelRatio: 2 });
+        }
+        iconNameForType.set(t, iconName);
 
-      map.addSource("nodes", { type:"geojson", data: geo });
+        // Legend chip
+        const chip = document.createElement("div"); chip.className="chip";
+        chip.append(legendSwatch(shape, color));
+        const label = document.createElement("span"); label.textContent = t;
+        chip.append(label);
+        legend.append(chip);
+      }
+
+      // GeoJSON with per-feature icon name
+      const features = nodes.map(n => ({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [n.lon, n.lat] },
+        properties: {
+          id: n.id,
+          name: n.name,
+          type: n.type,
+          icon: iconNameForType.get(n.type) || iconNameForType.get(types[0])
+        }
+      }));
+
+      map.addSource("nodes", { type:"geojson", data: { type:"FeatureCollection", features } });
       map.addLayer({
         id:"nodes",
-        type:"circle",
+        type:"symbol",
         source:"nodes",
-        paint:{
-          "circle-radius":6,
-          "circle-stroke-width":1,
-          "circle-color":["get","color"],
-          "circle-stroke-color":"#222"
+        layout:{
+          "icon-image": ["get","icon"],
+          "icon-size": 0.9,
+          "icon-allow-overlap": true
         }
       });
 
-      if (geo.features.length){
+      // Fit bounds
+      if (features.length){
         const b = new mapboxgl.LngLatBounds();
-        geo.features.forEach(f => b.extend(f.geometry.coordinates));
+        features.forEach(f => b.extend(f.geometry.coordinates));
         map.fitBounds(b, {padding:40, maxZoom:6});
       }
 
@@ -215,14 +288,23 @@
 
       function rerender(){
         const filtered = nodes.filter(passesFilters);
-        map.getSource("nodes").setData({
-          type:"FeatureCollection",
-          features: filtered.map(n => ({
-            type:"Feature",
-            geometry:{type:"Point",coordinates:[n.lon,n.lat]},
-            properties:{id:n.id,name:n.name,type:n.type,color:colorFor(n)}
-          }))
-        });
+        const feats = filtered.map(n => ({
+          type: "Feature",
+          geometry: { type: "Point", coordinates: [n.lon, n.lat] },
+          properties: {
+            id: n.id,
+            name: n.name,
+            type: n.type,
+            icon: iconNameForType.get(n.type) || iconNameForType.get(types[0])
+          }
+        }));
+        map.getSource("nodes").setData({ type:"FeatureCollection", features: feats });
+
+        if (feats.length){
+          const b = new mapboxgl.LngLatBounds();
+          feats.forEach(f => b.extend(f.geometry.coordinates));
+          map.fitBounds(b, {padding:40, maxZoom:6});
+        }
       }
 
       typeSel.addEventListener("change", rerender);
@@ -244,7 +326,8 @@ ${hit.url ? `<a href="${hit.url}" target="_blank" rel="noopener">Website</a>` : 
       map.on("click","nodes",(e)=>{
         const f = e.features?.[0];
         if (!f) return;
-        const n = nodeById.get(f.properties.id);
+        const id = f.properties.id;
+        const n = nodes.find(x => x.id === id);
         if (!n) return;
         details.innerHTML = `<b>${n.name}</b> — <i>${n.type}</i>
 ${n.city ? n.city + ", " : ""}${n.country || ""}
