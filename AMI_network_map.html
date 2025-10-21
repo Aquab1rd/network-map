@@ -76,6 +76,7 @@
 
     function setStatus(msg, isError=false){
       statusEl.innerHTML = isError ? `<span class="error">${msg}</span>` : msg;
+      console.log(msg);
     }
 
     // --- CSV loader ---
@@ -146,7 +147,6 @@
     for (const t of types) typeSel.append(new Option(t, t));
     for (const t of allTags) tagSel.append(new Option(t, t));
 
-    // Nice palette, deterministic by type index
     const palette = ["#4e79a7","#f28e2b","#e15759","#76b7b2","#59a14f","#edc948","#b07aa1","#ff9da7","#9c755f","#bab0ab",
                      "#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf"];
     const typeColors = new Map(types.map((t,i)=>[t, palette[i % palette.length]]));
@@ -171,173 +171,240 @@
     });
     map.addControl(new mapboxgl.NavigationControl());
 
-    // --- icon factory: draw colored shapes on canvas and add to map as images ---
-    function makeIcon(shape, fill, size=28, stroke="#222"){
+    // --- icon factory + safe addImage (ImageData) ---
+    function makeIconCanvas(shape, fill, size=48, stroke="#111"){
       const c = document.createElement("canvas");
       c.width = c.height = size;
       const ctx = c.getContext("2d");
       ctx.clearRect(0,0,size,size);
-      ctx.lineWidth = 2;
+      ctx.lineWidth = Math.max(2, size*0.05);
       ctx.strokeStyle = stroke;
       ctx.fillStyle = fill;
 
-      const r = size*0.35;
+      const r = size*0.33;
       const cx = size/2, cy = size/2;
 
       ctx.beginPath();
       if (shape === "circle"){
         ctx.arc(cx, cy, r, 0, Math.PI*2);
       } else if (shape === "square"){
-        const s = r*1.5;
+        const s = r*1.6;
         ctx.rect(cx - s/2, cy - s/2, s, s);
       } else if (shape === "diamond"){
-        const s = r*1.55;
+        const s = r*1.8;
         ctx.moveTo(cx, cy - s/2);
         ctx.lineTo(cx + s/2, cy);
         ctx.lineTo(cx, cy + s/2);
         ctx.lineTo(cx - s/2, cy);
         ctx.closePath();
       } else if (shape === "triangle"){
-        const s = r*1.8;
+        const s = r*2.0;
         const h = s*Math.sqrt(3)/2;
         ctx.moveTo(cx, cy - h/2);
         ctx.lineTo(cx - s/2, cy + h/2);
         ctx.lineTo(cx + s/2, cy + h/2);
         ctx.closePath();
       } else {
-        // fallback circle
         ctx.arc(cx, cy, r, 0, Math.PI*2);
       }
       ctx.fill();
       ctx.stroke();
+
+      // center dot for visibility
+      ctx.beginPath();
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      ctx.arc(cx, cy, size*0.035, 0, Math.PI*2);
+      ctx.fill();
+
       return c;
     }
 
-    // Prebuild a map of type -> iconName, and also make legend swatches
-    const iconNameForType = new Map();
+    function addCanvasAsImage(map, id, canvas){
+      const ctx = canvas.getContext('2d');
+      const {width, height} = canvas;
+      const imgData = ctx.getImageData(0,0,width,height);
+      if (map.hasImage(id)) map.removeImage(id);
+      map.addImage(id, imgData, { pixelRatio: 1 });
+    }
+
     function legendSwatch(shape, color){
-      const c = makeIcon(shape, color, 22);
+      const c = makeIconCanvas(shape, color, 22);
       const img = document.createElement("img");
       img.src = c.toDataURL("image/png");
       return img;
     }
 
     map.on('load', () => {
-      // force 2D feel (no tilt/rotation)
+      // keep 2D feel
       map.setPitch(0);
       map.setBearing(0);
       map.dragRotate.disable();
       map.touchZoomRotate.disableRotation();
 
-      // Register one icon per type (shape+color combo)
-      for (const t of types){
-        const shape = SHAPE_BY_TYPE.get(t) || fallbackShape;
-        const color = typeColors.get(t) || "#999";
-        const icon = makeIcon(shape, color, 28);
-        const iconName = `marker-${t.replace(/\s+/g,'_')}`;
-        if (!map.hasImage(iconName)) {
-          map.addImage(iconName, icon, { pixelRatio: 2 });
+      let symbolLayerReady = false;
+
+      try {
+        // Register one icon per type (shape+color combo)
+        const iconNameForType = new Map();
+        for (const t of types){
+          const shape = SHAPE_BY_TYPE.get(t) || fallbackShape;
+          const color = typeColors.get(t) || "#999";
+          const iconName = `marker-${t.replace(/\s+/g,'_')}`;
+          addCanvasAsImage(map, iconName, makeIconCanvas(shape, color, 48));
+
+          iconNameForType.set(t, iconName);
+
+          // Legend chip
+          const chip = document.createElement("div"); chip.className="chip";
+          chip.append(legendSwatch(shape, color));
+          const label = document.createElement("span"); label.textContent = t || "(Uncategorized)";
+          chip.append(label);
+          legend.append(chip);
         }
-        iconNameForType.set(t, iconName);
 
-        // Legend chip
-        const chip = document.createElement("div"); chip.className="chip";
-        chip.append(legendSwatch(shape, color));
-        const label = document.createElement("span"); label.textContent = t;
-        chip.append(label);
-        legend.append(chip);
-      }
-
-      // GeoJSON with per-feature icon name
-      const features = nodes.map(n => ({
-        type: "Feature",
-        geometry: { type: "Point", coordinates: [n.lon, n.lat] },
-        properties: {
-          id: n.id,
-          name: n.name,
-          type: n.type,
-          icon: iconNameForType.get(n.type) || iconNameForType.get(types[0])
-        }
-      }));
-
-      map.addSource("nodes", { type:"geojson", data: { type:"FeatureCollection", features } });
-      map.addLayer({
-        id:"nodes",
-        type:"symbol",
-        source:"nodes",
-        layout:{
-          "icon-image": ["get","icon"],
-          "icon-size": 0.9,
-          "icon-allow-overlap": true
-        }
-      });
-
-      // Fit bounds
-      if (features.length){
-        const b = new mapboxgl.LngLatBounds();
-        features.forEach(f => b.extend(f.geometry.coordinates));
-        map.fitBounds(b, {padding:40, maxZoom:6});
-      }
-
-      // Filtering and search
-      function passesFilters(n){
-        const typeOk = (typeSel.value === "All" || n.type === typeSel.value);
-        const tagOk  = (tagSel.value === "Any" || n.tags.includes(tagSel.value));
-        return typeOk && tagOk;
-      }
-
-      function rerender(){
-        const filtered = nodes.filter(passesFilters);
-        const feats = filtered.map(n => ({
+        // GeoJSON with per-feature icon name
+        const features = nodes.map(n => ({
           type: "Feature",
           geometry: { type: "Point", coordinates: [n.lon, n.lat] },
           properties: {
             id: n.id,
             name: n.name,
             type: n.type,
-            icon: iconNameForType.get(n.type) || iconNameForType.get(types[0])
+            icon: iconNameForType.get(n.type) || iconNameForType.get(types[0]) || "fallback"
           }
         }));
-        map.getSource("nodes").setData({ type:"FeatureCollection", features: feats });
 
-        if (feats.length){
+        // Fallback icon if needed
+        if (!map.hasImage("fallback")) {
+          addCanvasAsImage(map, "fallback", makeIconCanvas("circle", "#999", 48));
+        }
+
+        map.addSource("nodes", { type:"geojson", data: { type:"FeatureCollection", features } });
+        map.addLayer({
+          id:"nodes",
+          type:"symbol",
+          source:"nodes",
+          layout:{
+            "icon-image": ["get","icon"],
+            "icon-size": 0.7,
+            "icon-allow-overlap": true
+          }
+        });
+
+        symbolLayerReady = true;
+
+        // Fit bounds
+        if (features.length){
           const b = new mapboxgl.LngLatBounds();
-          feats.forEach(f => b.extend(f.geometry.coordinates));
+          features.forEach(f => b.extend(f.geometry.coordinates));
           map.fitBounds(b, {padding:40, maxZoom:6});
         }
-      }
 
-      typeSel.addEventListener("change", rerender);
-      tagSel.addEventListener("change", rerender);
-      search.addEventListener("input", () => {
-        const q = search.value.toLowerCase().trim();
-        const hit = nodes.find(n => n.name.toLowerCase().includes(q));
-        if (hit){
-          details.innerHTML = `<b>${hit.name}</b> — <i>${hit.type}</i>
+        // Filtering and search
+        function passesFilters(n){
+          const typeOk = (typeSel.value === "All" || n.type === typeSel.value);
+          const tagOk  = (tagSel.value === "Any" || n.tags.includes(tagSel.value));
+          return typeOk && tagOk;
+        }
+
+        function rerender(){
+          const filtered = nodes.filter(passesFilters);
+          const feats = filtered.map(n => ({
+            type: "Feature",
+            geometry: { type: "Point", coordinates: [n.lon, n.lat] },
+            properties: {
+              id: n.id,
+              name: n.name,
+              type: n.type,
+              icon: iconNameForType.get(n.type) || "fallback"
+            }
+          }));
+          map.getSource("nodes").setData({ type:"FeatureCollection", features: feats });
+
+          if (feats.length){
+            const b = new mapboxgl.LngLatBounds();
+            feats.forEach(f => b.extend(f.geometry.coordinates));
+            map.fitBounds(b, {padding:40, maxZoom:6});
+          }
+        }
+
+        typeSel.addEventListener("change", rerender);
+        tagSel.addEventListener("change", rerender);
+        search.addEventListener("input", () => {
+          const q = search.value.toLowerCase().trim();
+          const hit = nodes.find(n => n.name.toLowerCase().includes(q));
+          if (hit){
+            details.innerHTML = `<b>${hit.name}</b> — <i>${hit.type}</i>
 ${hit.city ? hit.city + ", " : ""}${hit.country || ""}
 
 Tags: ${hit.tags.join(", ") || "—"}
 ${hit.url ? `<a href="${hit.url}" target="_blank" rel="noopener">Website</a>` : ""}`;
-          map.flyTo({center:[hit.lon, hit.lat], zoom:6});
-        }
-      });
-      clearSel.addEventListener("click", ()=>{ details.textContent="(Click a pin to see details)"; search.value=""; rerender(); });
+            map.flyTo({center:[hit.lon, hit.lat], zoom:6});
+          }
+        });
+        clearSel.addEventListener("click", ()=>{ details.textContent="(Click a pin to see details)"; search.value=""; rerender(); });
 
-      map.on("click","nodes",(e)=>{
-        const f = e.features?.[0];
-        if (!f) return;
-        const id = f.properties.id;
-        const n = nodes.find(x => x.id === id);
-        if (!n) return;
-        details.innerHTML = `<b>${n.name}</b> — <i>${n.type}</i>
+        map.on("click","nodes",(e)=>{
+          const f = e.features?.[0];
+          if (!f) return;
+          const id = f.properties.id;
+          const n = nodes.find(x => x.id === id);
+          if (!n) return;
+          details.innerHTML = `<b>${n.name}</b> — <i>${n.type}</i>
 ${n.city ? n.city + ", " : ""}${n.country || ""}
 
 Tags: ${n.tags.join(", ") || "—"}
 ${n.url ? `<a href="${n.url}" target="_blank" rel="noopener">Website</a>` : ""}`;
-        map.flyTo({center:[n.lon, n.lat], zoom:6});
-      });
+          map.flyTo({center:[n.lon, n.lat], zoom:6});
+        });
 
-      setStatus(`Loaded <b>${nodes.length}</b> nodes.`);
+        setStatus(`Loaded <b>${nodes.length}</b> nodes.`);
+
+      } catch (err) {
+        console.warn("Symbol icons failed, falling back to circle layer.", err);
+
+        // Fallback: colored circles so you never lose pins
+        const features = nodes.map(n => ({
+          type: "Feature",
+          geometry: { type: "Point", coordinates: [n.lon, n.lat] },
+          properties: { id:n.id, name:n.name, type:n.type, color: colorFor(n) }
+        }));
+        map.addSource("nodes", { type:"geojson", data: { type:"FeatureCollection", features } });
+        map.addLayer({
+          id:"nodes",
+          type:"circle",
+          source:"nodes",
+          paint:{
+            "circle-radius":6,
+            "circle-stroke-width":1,
+            "circle-color":["get","color"],
+            "circle-stroke-color":"#222"
+          }
+        });
+
+        if (features.length){
+          const b = new mapboxgl.LngLatBounds();
+          features.forEach(f => b.extend(f.geometry.coordinates));
+          map.fitBounds(b, {padding:40, maxZoom:6});
+        }
+
+        // minimal interactions still wired in fallback
+        map.on("click","nodes",(e)=>{
+          const f = e.features?.[0];
+          if (!f) return;
+          const id = f.properties.id;
+          const n = nodes.find(x => x.id === id);
+          if (!n) return;
+          details.innerHTML = `<b>${n.name}</b> — <i>${n.type}</i>
+${n.city ? n.city + ", " : ""}${n.country || ""}
+
+Tags: ${n.tags.join(", ") || "—"}
+${n.url ? `<a href="${n.url}" target="_blank" rel="noopener">Website</a>` : ""}`;
+          map.flyTo({center:[n.lon, n.lat], zoom:6});
+        });
+
+        setStatus(`Loaded <b>${nodes.length}</b> nodes (circle fallback).`);
+      }
     });
   })();
   </script>
