@@ -96,6 +96,9 @@
     const EDGES_CSV_URL = "https://docs.google.com/spreadsheets/d/1eQrmiVA4wxf6J79SZkyhZb-vEAyX3yxfapen113MSrA/gviz/tq?tqx=out:csv&sheet=Edges";
     const MAPBOX_TOKEN  = "pk.eyJ1IjoiYXF1YWIxcmQiLCJhIjoiY21ndjl5Y2RzMGN2azJsc2J4d3d2N2tyeSJ9.JApvZZEs_kiwNl4Y9-aRaQ";
 
+    // ZOOM CONSTANTS
+    const Z_NODE_FOCUS = 11; // must be > clusterMaxZoom to ensure de-cluster
+
     // UI refs
     const statusEl = document.getElementById('status');
     const typeSel  = document.getElementById('typeFilter');
@@ -144,7 +147,7 @@
       return "1"; // default to first if unset
     }
 
-    // IMPORTANT: manual-only gmaps (no auto from lat/lon)
+    // manual-only gmaps (no auto from lat/lon)
     function readManualGMaps(row){
       if (!gmapsKey) return "";
       const val = String(row[gmapsKey] ?? "").trim();
@@ -302,7 +305,6 @@
 
     let selectedNodeId = null;
     let selectedEdgeKey = null;
-    const nodeColor = n => typeColors.get(n.type) || "#999";
     function edgeKey(e){
       const a = e.source < e.target ? e.source : e.target;
       const b = e.source < e.target ? e.target : e.source;
@@ -326,8 +328,7 @@
           properties:{
             source:e.source, target:e.target, relationship:rel, since:e.since||"",
             color: st.color, width: hi ? st.width+1.5 : st.width, opacity: hi ? 0.9 : 0.45,
-            key: edgeKey(e),
-            label: `${nodeById.get(e.source)?.name || e.source} ${rel} ${nodeById.get(e.target)?.name || e.target}${e.since?` (since ${e.since})`:""}`
+            key: edgeKey(e)
           }
         });
       }
@@ -382,7 +383,17 @@
       clusterList.querySelectorAll(".cluster-item").forEach(el=>{
         el.addEventListener("click", ()=>{
           const id = el.getAttribute("data-id");
-          selectNode(id, true); // fly + highlight
+          const n = nodeById.get(id);
+          if (!n) return;
+
+          // First zoom beyond cluster threshold so the pin exists,
+          // then select/highlight it.
+          const once = () => {
+            map.off('moveend', once);
+            selectNode(id, true);
+          };
+          map.on('moveend', once);
+          map.easeTo({ center:[n.lon, n.lat], zoom: Z_NODE_FOCUS, duration: 600 });
         });
       });
     }
@@ -518,12 +529,12 @@
       });
       clearSel.addEventListener("click", ()=>{ search.value=""; details.textContent="(Click a pin or a line to see details)"; refresh(); });
 
-      // Node select (also called by cluster list)
+      // Node select (also used after cluster-list zoom)
       function selectNode(id, keepClusterOpen=false){
         selectedNodeId = id; selectedEdgeKey=null;
         const n = nodeById.get(id); if(!n) return;
         details.innerHTML = nodeDetailsHTML(n);
-        map.flyTo({center:[n.lon,n.lat], zoom:6});
+        map.flyTo({center:[n.lon,n.lat], zoom: Z_NODE_FOCUS}); // ensure unclustered
 
         const list = nodes.filter(passesNodeFilters);
         const ids = new Set(list.map(x=>x.id));
@@ -538,19 +549,22 @@
         selectNode(f.properties.id);
       });
 
-      // Cluster click → show list and zoom; clicking a list item flies to node (and highlights)
+      // Cluster click → show list and zoom; list item click zooms + selects node
       map.on("click","clusters", (e) => {
         const features = map.queryRenderedFeatures(e.point, { layers: ["clusters"] });
         const clusterId = features[0]?.properties?.cluster_id;
         if (clusterId == null) return;
+
         map.getSource("nodes").getClusterLeaves(clusterId, 200, 0, (err, leaves) => {
           if (err || !leaves) return;
           const items = leaves.map(l => nodeById.get(l.properties.id)).filter(Boolean);
           showClusterList(`This area has ${items.length} items`, items);
         });
+
         map.getSource("nodes").getClusterExpansionZoom(clusterId, (err, zoom) => {
           if (err) return;
-          map.easeTo({ center: e.lngLat, zoom });
+          // expand a bit, but final zoom happens when list item clicked
+          map.easeTo({ center: e.lngLat, zoom: Math.max(zoom, 9) });
         });
       });
 
