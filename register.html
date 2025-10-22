@@ -1,1 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Alongside Network — Submit / Update Info</title>
+
+  <style>
+    :root { --bg:#0f1115; --panel:#151922; --ink:#e8ebf2; --muted:#9aa3b2; --accent:#3aa0ff; --border:#202634; }
+    html, body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+    .wrap { max-width:1100px; margin:0 auto; padding:22px; }
+    header { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:14px; }
+    header a { color:var(--muted); text-decoration:none; }
+    header a:hover { color:var(--ink); }
+    h1 { font-size:22px; margin:8px 0 6px; }
+    .hint { color:var(--muted); font-size:12px; margin:0 0 16px; }
+    .card { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px; margin:14px 0; }
+    .card h2 { margin:0 0 6px; font-size:18px; }
+    .card p { color:var(--muted); margin:6px 0 12px; }
+    .note { background:#101521; border:1px dashed #2a354b; color:var(--muted); border-radius:10px; padding:10px 12px; margin:10px 0; }
+    .btnrow { display:flex; gap:10px; flex-wrap:wrap; margin:10px 0 18px; }
+    .btn { background:#0c0f16; border:1px solid var(--border); color:var(--ink); border-radius:8px; padding:8px 12px; text-decoration:none; }
+    .btn:hover { border-color:#3a4863; }
+    iframe { width:100%; border:0; background:#0c0f16; border-radius:10px; }
+    footer { color:var(--muted); font-size:12px; margin:18px 0 10px; display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+    .pill { display:inline-block; padding:4px 8px; border:1px solid var(--border); border-radius:999px; color:var(--muted); font-size:12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div><a href="index.html" class="pill">← Back to Map</a></div>
+      <div><a href="index.html">Alongside Network Map</a></div>
+    </header>
+
+    <h1>Submit / Update Info</h1>
+    <p class="hint">
+      Use these forms to add new people, churches, or organizations (<b>Nodes</b>) and to define relationships between them (<b>Edges</b>).
+      Submissions are reviewed before appearing on the public map.
+    </p>
+
+    <div class="note">
+      <b>Privacy & Approval</b><br>
+      Only approved entries appear on the map. Please provide accurate info and include a contact email so we can verify details if needed.
+    </div>
+
+    <!-- ===== NODES / REGISTRATION FORM ===== -->
+    <div class="card" id="nodes">
+      <h2>Register a New Node</h2>
+      <p>Submit a person, church, supporter, or partner organization. After approval, it will appear on the map.</p>
+
+      <!-- Replace with your long form URL if you have it. The short URL works with ?embedded=true. -->
+      <iframe
+        title="Register Node"
+        src="https://forms.gle/ghtaSmgoqCxAiNXM8/viewform?embedded=true"
+        height="1400"
+        loading="lazy"
+        referrerpolicy="no-referrer-when-downgrade">
+        Loading…
+      </iframe>
+    </div>
+
+    <!-- ===== EDGES / CONNECTIONS FORM ===== -->
+    <div class="card" id="edges">
+      <h2>Add a Connection (Relationship)</h2>
+      <p>Link two existing nodes (e.g., <i>Leads</i>, <i>Supports</i>, or <i>Partners</i>). Use the exact IDs or names from the map/sheet.</p>
+
+      <iframe
+        title="Register Connection"
+        src="https://forms.gle/oHb5XJ7SLZ9DdioZ8/viewform?embedded=true"
+        height="1200"
+        loading="lazy"
+        referrerpolicy="no-referrer-when-downgrade">
+        Loading…
+      </iframe>
+    </div>
+
+    <div class="card">
+      <h2>Tips</h2>
+      <ul class="hint">
+        <li>Use decimal coordinates (e.g., <code>59.437</code>, <code>24.753</code>). If you don’t know them, paste a Google Maps link.</li>
+        <li>Keep <b>IDs</b> short and unique (e.g., <code>A001</code>).</li>
+        <li>Relationships use: <b>leads</b>, <b>supports</b>, <b>partners</b> (others default to “linked”).</li>
+        <li>If multiple people share the same city, a small difference in coordinates prevents overlapping pins.</li>
+      </ul>
+      <div class="btnrow">
+        <a class="btn" href="index.html#help">How the map works</a>
+        <a class="btn" href="#nodes">Add a Node</a>
+        <a class="btn" href="#edges">Add a Connection</a>
+      </div>
+    </div>
+
+    <footer>
+      <div>© Alongside Ministries — Data maintained by the community, reviewed by admins.</div>
+      <div>Site by <a href="mailto:YOUR.EMAIL@EXAMPLE.COM" style="color:var(--accent); text-decoration:none;">your email</a></div>
+    </footer>
+  </div>
+
+  <script>
+    // Optional: make iframes taller on mobile portrait
+    function adjustHeights(){
+      var h = Math.max(900, Math.round(window.innerHeight * 1.2));
+      document.querySelectorAll('iframe').forEach(f=>{
+        // only increase (never shrink below hardcoded height)
+        if (parseInt(f.getAttribute('height'),10) < h) f.setAttribute('height', h);
+      });
+    }
+    window.addEventListener('load', adjustHeights);
+    window.addEventListener('resize', adjustHeights);
+  </script>
+</body>
+</html>
 
