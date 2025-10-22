@@ -1,0 +1,80 @@
+<section class="card" id="submit-node">
+  <h2>Submit a New Node</h2>
+  <p class="hint">Your submission will be reviewed by an admin before appearing on the map.</p>
+
+  <form id="nodeForm">
+    <div class="row">
+      <label>Short ID (e.g., A001)<br><input name="id" required /></label>
+      <label>Name<br><input name="name" required /></label>
+      <label>Type<br>
+        <select name="type" required>
+          <option value="">Choose…</option>
+          <option>Alongsider</option>
+          <option>Church</option>
+          <option>Partner Org</option>
+          <option>Supporter</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <label>City<br><input name="city" /></label>
+      <label>Country<br><input name="country" /></label>
+      <label>Degree<br>
+        <select name="degree">
+          <option value="1">First (direct)</option>
+          <option value="2">Second (indirect)</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <label>Latitude<br><input name="lat" placeholder="59.437" /></label>
+      <label>Longitude<br><input name="lon" placeholder="24.753" /></label>
+      <label>Tags (comma-separated)<br><input name="tags" placeholder="theology, leadership" /></label>
+    </div>
+    <div class="row">
+      <label>Website<br><input name="url" placeholder="https://…" /></label>
+      <label>Google Maps link<br><input name="gmaps" placeholder="https://maps.google.com/…" /></label>
+      <label>Your email (for verification)<br><input name="email" type="email" required /></label>
+    </div>
+    <div class="row">
+      <label style="flex:1;">Notes (optional)<br><textarea name="notes" rows="3" style="width:100%;"></textarea></label>
+    </div>
+
+    <!-- honeypot (anti-bot) -->
+    <input type="text" name="website" style="display:none" tabindex="-1" autocomplete="off" />
+
+    <button type="submit">Submit for Approval</button>
+    <span id="nodeMsg" class="hint"></span>
+  </form>
+
+  <script>
+    const WEBAPP = "https://script.google.com/macros/s/AKfycbwvPzNRwAIuThQOOteJFzx3Ota5FnajHV5GNueNajpUX1-CwN3KqYp6XydiV5cTQhJS/exec"; // <-- paste Apps Script web app URL
+
+    document.getElementById('nodeForm').addEventListener('submit', async (ev)=>{
+      ev.preventDefault();
+      const form = ev.target;
+      const data = Object.fromEntries(new FormData(form).entries());
+
+      // honeypot
+      if (data.website) { return; }
+
+      // payload
+      data.kind = 'node';
+
+      // no-cors: request succeeds silently; we show a local message
+      document.getElementById('nodeMsg').textContent = "Sending…";
+      try{
+        await fetch(WEBAPP, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+        form.reset();
+        document.getElementById('nodeMsg').textContent = "Thanks! Your submission was sent for approval.";
+      }catch(err){
+        document.getElementById('nodeMsg').textContent = "Couldn’t send. Please email the admin instead.";
+      }
+    });
+  </script>
+</section>
