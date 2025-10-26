@@ -613,14 +613,36 @@
                 'supports', 2.4,
                 'partners', 2.4,
                 1.8
-            ],
-            'line-color': [
-              'match', ['get','relationship'],
-                'leads',    'var(--r-leads)',
-                'supports', 'var(--r-supports)',
-                'partners', 'var(--r-partners)',
-                'var(--r-linked)'
-            ],
+// get CSS variable values as real colors
+const css = getComputedStyle(document.documentElement);
+const colorLeads     = css.getPropertyValue('--r-leads').trim();
+const colorSupports  = css.getPropertyValue('--r-supports').trim();
+const colorPartners  = css.getPropertyValue('--r-partners').trim();
+const colorLinked    = css.getPropertyValue('--r-linked').trim();
+
+map.addLayer({
+  id:'edges-line',
+  type:'line',
+  source:'edges',
+  paint:{
+    'line-width': [
+      'match', ['get','relationship'],
+        'leads', 2.4,
+        'supports', 2.4,
+        'partners', 2.4,
+        1.8
+    ],
+    'line-color': [
+      'match', ['get','relationship'],
+        'leads',    colorLeads,
+        'supports', colorSupports,
+        'partners', colorPartners,
+        colorLinked
+    ],
+    'line-opacity': 0.85
+  }
+}, 'unclustered-points');
+
             'line-opacity': 0.85
           }
         }, 'unclustered-points'); // draw lines beneath symbols
