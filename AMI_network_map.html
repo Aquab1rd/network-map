@@ -87,9 +87,7 @@
       border-radius:12px; padding:8px 12px; font:inherit;
       transition: border-color .2s ease, transform .08s ease, box-shadow .2s ease;
     }
-    .btn:hover, select:hover, input:hover{
-      border-color:#2b425b;
-    }
+    .btn:hover, select:hover, input:hover{ border-color:#2b425b; }
     .btn.primary{
       background:linear-gradient(180deg, var(--accent2), var(--accent));
       color:#06121a; border:0; box-shadow: var(--shadow);
@@ -112,7 +110,8 @@
       border-radius:16px; overflow:hidden; box-shadow: var(--shadow);
       animation: floatIn 500ms ease;
     }
-    .map-wrap{ position:relative; height: calc(100vh - 190px); min-height:520px; }
+    /* SAFER HEIGHT */
+    .map-wrap{ position:relative; height: 80vh; min-height:520px; }
     #map{ position:absolute; inset:0; }
 
     .toolbar{
@@ -131,9 +130,7 @@
     }
 
     /* Sidebar */
-    .side{
-      display:flex; flex-direction:column; gap:14px;
-    }
+    .side{ display:flex; flex-direction:column; gap:14px; }
     .card{
       background:rgba(13,18,28,0.7); border:1px solid var(--border); border-radius:16px; padding:14px;
       box-shadow: var(--shadow); animation: fadeIn 400ms ease;
@@ -325,7 +322,7 @@
     const map = new mapboxgl.Map({
       container: 'map',
       style: 'mapbox://styles/mapbox/dark-v11',
-      center: [10, 38], // Europe-ish
+      center: [10, 38],
       zoom: 2.1,
       pitch: 0,
       attributionControl: true
@@ -382,17 +379,25 @@
       return img;
     }
 
-    function addTypeIcons(){
-      // Ensure style is ready
+    async function addTypeIcons(){
+      // Ensure style is fully ready before addImage
+      if (!map.isStyleLoaded()) {
+        await new Promise(r => map.once('load', r));
+      }
       const add = (name, shape, color) => new Promise(res=>{
         const img = makeIcon(shape, color, 32);
-        img.onload = ()=> { if(!map.hasImage(name)) map.addImage(name, img, {pixelRatio:2}); res(); }
+        img.onload = ()=> {
+          if(!map.hasImage(name)) map.addImage(name, img, {pixelRatio:2});
+          res();
+        };
       });
-      return Promise.all([
-        add('icon-alongsider','circle', getComputedStyle(document.documentElement).getPropertyValue('--t-alongsider').trim()),
-        add('icon-church','rect', getComputedStyle(document.documentElement).getPropertyValue('--t-church').trim()),
-        add('icon-partner','diamond', getComputedStyle(document.documentElement).getPropertyValue('--t-partner').trim()),
-        add('icon-supporter','circle', getComputedStyle(document.documentElement).getPropertyValue('--t-supporter').trim())
+      const css = getComputedStyle(document.documentElement);
+      const c = v => css.getPropertyValue(v).trim();
+      await Promise.all([
+        add('icon-alongsider','circle', c('--t-alongsider')),
+        add('icon-church','rect', c('--t-church')),
+        add('icon-partner','diamond', c('--t-partner')),
+        add('icon-supporter','circle', c('--t-supporter'))
       ]);
     }
 
@@ -411,9 +416,10 @@
 
     async function loadData(){
       const [nodes, edges] = await Promise.all([loadCSV(NODES_CSV_URL), loadCSV(EDGES_CSV_URL)]);
+
       // Normalize nodes
       allNodes = nodes
-        .filter(d => !('public' in d) || parseBool(d.public)) // if column exists, honor it
+        .filter(d => !('public' in d) || parseBool(d.public))
         .map(d => {
           const lat = parseFloat(String(d.lat||'').replace(',', '.'));
           const lon = parseFloat(String(d.lon||'').replace(',', '.'));
@@ -434,7 +440,7 @@
 
       nodeIndex = new Map(allNodes.map(n => [n.id, n]));
 
-      // Normalize edges (only keep those with valid endpoints)
+      // Normalize edges
       allEdges = edges
         .filter(d => !('public' in d) || parseBool(d.public))
         .map(d => ({
@@ -445,7 +451,6 @@
         }))
         .filter(e => nodeIndex.has(e.source_id) && nodeIndex.has(e.target_id));
 
-      // initial filter = none
       applyFilters();
       document.getElementById('dataStamp').textContent = 'Data last updated: ' + (new Date()).toLocaleString();
     }
@@ -483,7 +488,6 @@
       filteredEdges = showLines
         ? allEdges.filter(e=>{
             if (rel !== 'All' && e.relationship !== rel) return false;
-            // edge must connect visible nodes
             return allowedIds.has(e.source_id) && allowedIds.has(e.target_id);
           })
         : [];
@@ -523,98 +527,104 @@
 
     function addSourcesAndLayers(){
       // Nodes source (clustered)
-      map.addSource('nodes', {
-        type:'geojson',
-        data: nodesToGeoJSON(filteredNodes),
-        cluster: true,
-        clusterRadius: 60,
-        clusterMaxZoom: 12
-      });
+      if (!map.getSource('nodes')){
+        map.addSource('nodes', {
+          type:'geojson',
+          data: nodesToGeoJSON(filteredNodes),
+          cluster: true,
+          clusterRadius: 60,
+          clusterMaxZoom: 12
+        });
+      }
 
-      // Cluster layer
-      map.addLayer({
-        id:'clusters',
-        type:'circle',
-        source:'nodes',
-        filter:['has','point_count'],
-        paint:{
-          'circle-color': [
-            'step', ['get','point_count'],
-            'rgba(79,179,255,0.35)', 5,
-            'rgba(53,179,168,0.40)', 15,
-            'rgba(53,179,168,0.55)'
-          ],
-          'circle-radius': [
-            'step',['get','point_count'],
-            14, 5, 18, 15, 24, 50, 30
-          ],
-          'circle-stroke-color':'#152330',
-          'circle-stroke-width':1.5
-        }
-      });
+      // Cluster layers (guard re-add)
+      if (!map.getLayer('clusters')){
+        map.addLayer({
+          id:'clusters',
+          type:'circle',
+          source:'nodes',
+          filter:['has','point_count'],
+          paint:{
+            'circle-color': [
+              'step', ['get','point_count'],
+              'rgba(79,179,255,0.35)', 5,
+              'rgba(53,179,168,0.40)', 15,
+              'rgba(53,179,168,0.55)'
+            ],
+            'circle-radius': [
+              'step',['get','point_count'],
+              14, 5, 18, 15, 24, 50, 30
+            ],
+            'circle-stroke-color':'#152330',
+            'circle-stroke-width':1.5
+          }
+        });
+      }
 
-      map.addLayer({
-        id:'cluster-count',
-        type:'symbol',
-        source:'nodes',
-        filter:['has', 'point_count'],
-        layout:{
-          'text-field':['get','point_count_abbreviated'],
-          'text-size':12
-        },
-        paint:{
-          'text-color':'#dff2ff'
-        }
-      });
+      if (!map.getLayer('cluster-count')){
+        map.addLayer({
+          id:'cluster-count',
+          type:'symbol',
+          source:'nodes',
+          filter:['has', 'point_count'],
+          layout:{
+            'text-field':['get','point_count_abbreviated'],
+            'text-size':12
+          },
+          paint:{ 'text-color':'#dff2ff' }
+        });
+      }
 
       // Unclustered points (symbol icons by type)
-      map.addLayer({
-        id:'unclustered-points',
-        type:'symbol',
-        source:'nodes',
-        filter:['!', ['has','point_count']],
-        layout:{
-          'icon-image': [
-            'match', ['get','type'],
-              'Alongsider','icon-alongsider',
-              'Church','icon-church',
-              'Partner Org','icon-partner',
-              'Supporter','icon-supporter',
-              'icon-alongsider'
-          ],
-          'icon-size': 0.75,
-          'icon-allow-overlap': true
-        }
-      });
+      if (!map.getLayer('unclustered-points')){
+        map.addLayer({
+          id:'unclustered-points',
+          type:'symbol',
+          source:'nodes',
+          filter:['!', ['has','point_count']],
+          layout:{
+            'icon-image': [
+              'match', ['get','type'],
+                'Alongsider','icon-alongsider',
+                'Church','icon-church',
+                'Partner Org','icon-partner',
+                'Supporter','icon-supporter',
+                'icon-alongsider'
+            ],
+            'icon-size': 0.75,
+            'icon-allow-overlap': true
+          }
+        });
+      }
 
       // Edges source + layer
-      map.addSource('edges', {
-        type:'geojson',
-        data: edgesToGeoJSON(filteredEdges)
-      });
-
-      map.addLayer({
-        id:'edges-line',
-        type:'line',
-        source:'edges',
-        paint:{
-          'line-width': [
-            'match', ['get','relationship'],
-              'leads', 2.4,
-              'supports', 2.4,
-              'partners', 2.4,
-              1.8
-          ],
-          'line-color': [
-            'match', ['get','relationship'],
-              'leads',    'var(--r-leads)',
-              'supports', 'var(--r-supports)',
-              'partners', 'var(--r-partners)',
-              'var(--r-linked)'
-          ],
-          'line-opacity': 0.85
-        }
-      }, 'unclustered-points'); // draw lines beneath symbols
+      if (!map.getSource('edges')){
+        map.addSource('edges', { type:'geojson', data: edgesToGeoJSON(filteredEdges) });
+      }
+      if (!map.getLayer('edges-line')){
+        map.addLayer({
+          id:'edges-line',
+          type:'line',
+          source:'edges',
+          paint:{
+            'line-width': [
+              'match', ['get','relationship'],
+                'leads', 2.4,
+                'supports', 2.4,
+                'partners', 2.4,
+                1.8
+            ],
+            'line-color': [
+              'match', ['get','relationship'],
+                'leads',    'var(--r-leads)',
+                'supports', 'var(--r-supports)',
+                'partners', 'var(--r-partners)',
+                'var(--r-linked)'
+            ],
+            'line-opacity': 0.85
+          }
+        }, 'unclustered-points'); // draw lines beneath symbols
+      }
     }
 
     function updateSources(){
@@ -644,6 +654,7 @@
       // Cluster click -> zoom in and list leaves
       map.on('click','clusters', (e)=>{
         const features = map.queryRenderedFeatures(e.point, { layers:['clusters'] });
+        if (!features.length) return;
         const clusterId = features[0].properties.cluster_id;
         map.getSource('nodes').getClusterExpansionZoom(clusterId, (err, zoom)=>{
           if (err) return;
@@ -731,13 +742,23 @@
       navigator.clipboard.writeText(location.href).then(()=> toast('View link copied'));
     });
 
-    // ======= INIT =======
-    map.on('style.load', async ()=>{
-      await addTypeIcons();
-      await loadData();
-      addSourcesAndLayers();
-      onMapClick();
-      toast('Map ready');
+    // ======= INIT (safer) =======
+    map.on('load', async () => {
+      // ensure style is ready before adding images
+      if (!map.isStyleLoaded()) {
+        await new Promise(r => map.once('load', r));
+      }
+      try{
+        await addTypeIcons();        // custom icons (circle/rect/diamond)
+        await loadData();            // fetch Nodes + Edges CSV
+        addSourcesAndLayers();       // add layers
+        onMapClick();                // wire interactions
+        toast('Map ready');
+        map.resize();                // ensure proper render after layout
+      }catch(err){
+        console.error('Init error:', err);
+        toast('Error initializing map. Check console.');
+      }
     });
 
     // Hot reload data helper (optional)
